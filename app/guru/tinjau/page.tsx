@@ -2,8 +2,7 @@ import Link from "next/link";
 import { Monogram } from "@/components/Monogram";
 import { TeacherShell } from "@/components/Shell";
 import { PageHead, Status } from "@/components/Status";
-import { CLASSES, isLevel } from "@/lib/curriculum";
-import { listWorks } from "@/lib/db";
+import { getRoom, listRooms, listWorks, roomOf, roomForTeacher, seesAllClasses } from "@/lib/db";
 import { ago } from "@/lib/format";
 import { IkonKotak } from "@/components/Deco";
 
@@ -11,17 +10,18 @@ export const dynamic = "force-dynamic";
 
 const FILTERS: [string, string][] = [["submitted", "Menunggu ditinjau"], ["revision", "Perlu diperbaiki"], ["published", "Di galeri"], ["", "Semua"]];
 
-export default async function GuruTinjau({ searchParams }: { searchParams: Promise<{ k?: string; s?: string }> }) {
+export default async function GuruTinjau({ searchParams }: { searchParams: Promise<{ k?: string; c?: string; s?: string }> }) {
   const sp = await searchParams;
-  const k = Number(sp.k);
   const s = sp.s === undefined ? "submitted" : sp.s;
-  const href = (nk?: number, ns?: string) => `/guru/tinjau?${nk ? `k=${nk}&` : ""}s=${ns ?? s}`;
+  const href = (c?: string, ns?: string) => `/guru/tinjau?${c ? `c=${c}&` : ""}s=${ns ?? s}`;
   return (
     <TeacherShell>
       {(t) => {
         // Guru kelas hanya melihat kiriman kelasnya sendiri.
-        const level = t.level ?? (isLevel(k) ? k : undefined);
-        const all = listWorks(level);
+        const many = seesAllClasses(t);
+        const wanted = sp.c ?? sp.k;
+        const room = many ? (wanted ? (getRoom(wanted) ?? roomForTeacher(t, wanted)) : undefined) : roomForTeacher(t);
+        const all = listWorks(undefined, room?.id);
         const rows = s ? all.filter((r) => r.work.status === s) : all;
         const count = (v: string) => (v ? all.filter((r) => r.work.status === v).length : all.length);
         return (
@@ -30,16 +30,16 @@ export default async function GuruTinjau({ searchParams }: { searchParams: Promi
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="segmen" role="group" aria-label="Saring status">
                 {FILTERS.map(([v, t]) => (
-                  <Link key={t} href={href(level, v)} aria-current={s === v ? "true" : undefined}>
+                  <Link key={t} href={href(room?.id, v)} aria-current={s === v ? "true" : undefined}>
                     {t}
                     <span className="ml-1.5 text-xs opacity-60">{count(v)}</span>
                   </Link>
                 ))}
               </div>
-              {!t.level && <div className="segmen" role="group" aria-label="Saring kelas">
-                <Link href={href(undefined)} className={!level ? "aktif" : ""}>Semua kelas</Link>
-                {CLASSES.map((c) => (
-                  <Link key={c.level} href={href(c.level)} className={level === c.level ? "aktif" : ""} aria-label={`Kelas ${c.level}`}>K{c.level}</Link>
+              {many && <div className="segmen" role="group" aria-label="Saring kelas">
+                <Link href={href(undefined)} className={!room ? "aktif" : ""}>Semua kelas</Link>
+                {listRooms().map((r) => (
+                  <Link key={r.id} href={href(r.id)} className={room?.id === r.id ? "aktif" : ""}>{r.name}</Link>
                 ))}
               </div>}
             </div>
@@ -57,7 +57,7 @@ export default async function GuruTinjau({ searchParams }: { searchParams: Promi
                       <Monogram name={user.nickname} size={38} />
                       <span className="min-w-[160px] flex-1 leading-tight">
                         <span className="block font-semibold">{user.nickname}</span>
-                        <span className="text-sm text-tinta-2">Kelas {work.level} · dikirim {ago(work.submittedAt)}</span>
+                        <span className="text-sm text-tinta-2">{roomOf(user)?.name ?? `Kelas ${work.level}`} · dikirim {ago(work.submittedAt)}</span>
                       </span>
                       <Status status={work.status} />
                       <span className="tautan">Tinjau →</span>

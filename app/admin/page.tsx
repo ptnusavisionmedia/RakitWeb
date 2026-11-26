@@ -34,7 +34,7 @@ export default function AdminDasbor() {
             )}
 
             <div className="berurutan grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Stat icon="kelas" label="Siswa" value={s.students} note="di 6 kelas" />
+              <Stat icon="kelas" label="Siswa" value={s.students} note={`di ${s.rooms} kelas`} />
               <Stat icon="buku" label="Guru" value={s.teachers} note={`${s.admins} admin`} />
               <Stat icon="komentar" label="Orang tua" value={s.parents} note="akun terdaftar" />
               <Stat icon="galeri" label="Karya dikirim" value={s.works} note={`${s.waiting} menunggu ditinjau · ${s.reports} rapor terkirim`} />
@@ -56,9 +56,9 @@ export default function AdminDasbor() {
                   </thead>
                   <tbody className="divide-y divide-tinta/10">
                     {s.perClass.map((c) => (
-                      <tr key={c.level} className="baris">
+                      <tr key={c.id} className="baris">
                         <td className="px-4 py-3">
-                          <Link href={`/admin/kelas?k=${c.level}`} className="font-semibold text-kobalt hover:underline">Kelas {c.level}</Link>
+                          <Link href={`/admin/kelas/${c.id}`} className="font-semibold text-kobalt hover:underline">{c.name}</Link>
                           <span className="block max-w-[14rem] truncate text-xs text-tinta-2">{c.project}</span>
                         </td>
                         <td className="px-4 py-3">{c.teachers.length ? c.teachers.map((t) => t.name).join(", ") : <span className="text-tinta-2">Belum ada</span>}</td>

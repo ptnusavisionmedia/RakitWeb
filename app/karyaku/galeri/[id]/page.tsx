@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { Monogram } from "@/components/Monogram";
 import { StudentShell } from "@/components/Shell";
 import { WorkView } from "@/components/WorkView";
-import { getUser, getWorkById } from "@/lib/db";
+import { getUser, getWorkById, roomOf } from "@/lib/db";
 import { ago } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -15,8 +15,8 @@ export default async function GaleriItem({ params }: { params: Promise<{ id: str
       {(s) => {
         const w = getWorkById(id);
         // Galeri hanya untuk anggota kelas yang sama.
-        if (!w || w.level !== s.level || w.status !== "published" || !w.published) notFound();
-        const owner = getUser(w.userId)!;
+        const owner = w ? getUser(w.userId) : undefined;
+        if (!w || !owner || w.level !== s.level || owner.level !== w.level || roomOf(owner)?.id !== roomOf(s)?.id || w.status !== "published" || !w.published) notFound();
         return (
           <div className="mx-auto max-w-4xl">
             <Link href="/karyaku#galeri" className="tautan">← Kembali ke galeri</Link>
@@ -24,7 +24,7 @@ export default async function GaleriItem({ params }: { params: Promise<{ id: str
               <Monogram name={owner.nickname} size={48} />
               <div>
                 <h1 className="text-2xl">Karya {owner.nickname.replace(/ \(demo\)$/, "")}</h1>
-                <p className="text-sm text-tinta-2">Galeri kelas {w.level} · dipublikasikan {ago(w.publishedAt)}</p>
+                <p className="text-sm text-tinta-2">Galeri {roomOf(owner)?.name ?? `kelas ${w.level}`} · dipublikasikan {ago(w.publishedAt)}</p>
               </div>
             </div>
             <div className="mt-6">

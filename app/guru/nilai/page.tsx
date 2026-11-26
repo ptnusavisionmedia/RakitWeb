@@ -1,11 +1,10 @@
 import Link from "next/link";
-import { ClassTabs } from "@/components/ClassTabs";
+import { RoomTabs } from "@/components/RoomTabs";
 import { ClassReportActions } from "@/components/GradeForms";
 import { Monogram } from "@/components/Monogram";
 import { TeacherShell } from "@/components/Shell";
 import { PageHead, Stat } from "@/components/Status";
-import { isLevel } from "@/lib/curriculum";
-import { classSheet, type ReportStatus } from "@/lib/db";
+import { classSheet, roomForTeacher, seesAllClasses, type ReportStatus } from "@/lib/db";
 import { predikat, termLabel } from "@/lib/nilai";
 
 export const dynamic = "force-dynamic";
@@ -18,19 +17,18 @@ const STATUS: Record<ReportStatus, [string, string]> = {
 };
 const val = (n: number | null | undefined) => (n === null || n === undefined ? <span className="text-tinta-2">–</span> : n);
 
-export default async function GuruNilai({ searchParams }: { searchParams: Promise<{ k?: string }> }) {
+export default async function GuruNilai({ searchParams }: { searchParams: Promise<{ k?: string; c?: string }> }) {
   const sp = await searchParams;
-  const k = Number(sp.k ?? 1);
   return (
     <TeacherShell wide>
       {(t) => {
-        const level = t.level ?? (isLevel(k) ? k : 1);
-        const sheet = classSheet(t, level)!;
+        const room = roomForTeacher(t, sp.c ?? sp.k);
+        const sheet = classSheet(t, room.id)!;
         const sent = sheet.rows.filter((r) => r.status === "terkirim").length;
         const ready = sheet.rows.filter((r) => r.sh.final !== null).length;
         return (
           <div className="flex flex-col gap-8">
-            <PageHead icon="buku" eyebrow="Nilai dan Rapor" title={`Rekap nilai Kelas ${level}`} desc={`${termLabel()} · nilai akhir = tugas pertemuan 40% + karya 40% + sikap 20%`} right={t.level ? <span className="pil pil-isi">{t.nickname}</span> : <ClassTabs base="/guru/nilai" current={level} />} />
+            <PageHead icon="buku" eyebrow="Nilai dan Rapor" title={`Rekap nilai ${room.name}`} desc={`${termLabel()} · nilai akhir = tugas pertemuan 40% + karya 40% + sikap 20%`} right={seesAllClasses(t) ? <RoomTabs base="/guru/nilai" current={room.id} /> : <span className="pil pil-isi">{t.nickname}</span>} />
 
             <div className="berurutan grid gap-4 sm:grid-cols-3">
               <Stat icon="kelas" label="Siswa" value={sheet.rows.length} note="di kelas ini" />
@@ -41,7 +39,7 @@ export default async function GuruNilai({ searchParams }: { searchParams: Promis
             <section className="kartu p-6" aria-labelledby="aksi-rapor">
               <h2 id="aksi-rapor" className="text-lg">Rapor kelas</h2>
               <p className="mb-4 mt-1 text-sm text-tinta-2">Rapor dibuat otomatis dari nilai pertemuan, nilai karya, dan nilai sikap. Rapor hanya dikirim ke siswa dan orang tua yang terhubung dengan siswa itu.</p>
-              <ClassReportActions level={level} />
+              <ClassReportActions roomId={room.id} />
             </section>
 
             <section aria-labelledby="nilai-siswa">

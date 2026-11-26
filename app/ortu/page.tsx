@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export default function OrtuRingkasan() {
   return (
     <ParentShell>
-      {({ child, level, progress, work, notes, teacherName }, parent) => {
+      {({ child, level, className, progress, work, notes, teacherName }, parent) => {
         const meta = classMeta(level);
         const name = child.nickname.replace(/ \(demo\)$/, "");
         const done = progress?.completed.length ?? 0;
@@ -30,7 +30,7 @@ export default function OrtuRingkasan() {
                 <div className="min-w-[min(100%,14rem)] flex-1">
                   <p className="label-kecil">Halo, {parent.nickname}</p>
                   <h1 className="mt-1 text-[1.75rem] sm:text-[2rem]">Perkembangan {name}</h1>
-                  <p className="redup mt-1">Kelas {level} · {meta.project} · Wali kelas {teacherName}</p>
+                  <p className="redup mt-1">{className} · {meta.project} · Wali kelas {teacherName}</p>
                 </div>
                 <div className="flex w-full flex-col items-start gap-1.5 sm:w-auto sm:items-end">
                   <span className="label-kecil">Status karya</span>

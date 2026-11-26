@@ -5,7 +5,7 @@ import { TeacherShell } from "@/components/Shell";
 import { ParentNoteForm, ReviewForm } from "@/components/TeacherClient";
 import { WorkView } from "@/components/WorkView";
 import { classMeta } from "@/lib/curriculum";
-import { canTeach, getUser, getWorkById } from "@/lib/db";
+import { canTeachStudent, getUser, getWorkById, roomOf } from "@/lib/db";
 import { Status } from "@/components/Status";
 import { ago, STATUS_LABEL } from "@/lib/format";
 import type { VisualDoc } from "@/lib/page";
@@ -18,8 +18,8 @@ export default async function GuruTinjauItem({ params }: { params: Promise<{ id:
     <TeacherShell wide>
       {(t) => {
         const w = getWorkById(id);
-        if (!w || !w.submitted || !canTeach(t, w.level)) notFound();
-        const owner = getUser(w.userId)!;
+        const owner = w ? getUser(w.userId) : undefined;
+        if (!w || !w.submitted || !owner || !canTeachStudent(t, owner)) notFound();
         const meta = classMeta(w.level);
         const doc = w.kind === "visual" ? (w.submitted as VisualDoc) : null;
         return (
@@ -30,7 +30,7 @@ export default async function GuruTinjauItem({ params }: { params: Promise<{ id:
                 <Monogram name={owner.nickname} size={48} />
                 <div className="min-w-0 flex-1">
                   <h1 className="text-2xl">{owner.nickname}</h1>
-                  <p className="text-sm text-tinta-2">Kelas {w.level} · {meta.project} · dikirim {ago(w.submittedAt)}</p>
+                  <p className="text-sm text-tinta-2">{roomOf(owner)?.name ?? `Kelas ${w.level}`} · {meta.project} · dikirim {ago(w.submittedAt)}</p>
                 </div>
                 <Status status={w.status} testid="status" />
               </div>

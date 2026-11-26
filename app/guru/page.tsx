@@ -1,29 +1,31 @@
-import { ClassTabs } from "@/components/ClassTabs";
+import { RoomTabs } from "@/components/RoomTabs";
 import { Monogram } from "@/components/Monogram";
 import { TeacherShell } from "@/components/Shell";
 import { PageHead, Stat, Status } from "@/components/Status";
 import { AddStudent, MoveStudent } from "@/components/TeacherClient";
-import { classMeta, getLesson, isLevel } from "@/lib/curriculum";
-import { listStudents } from "@/lib/db";
+import { classMeta, getLesson } from "@/lib/curriculum";
+import { listRooms, listStudents, roomForTeacher, seesAllClasses } from "@/lib/db";
 import { ago } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-export default async function GuruKelas({ searchParams }: { searchParams: Promise<{ k?: string }> }) {
+export default async function GuruKelas({ searchParams }: { searchParams: Promise<{ k?: string; c?: string }> }) {
   const sp = await searchParams;
-  const k = Number(sp.k ?? 1);
   return (
     <TeacherShell>
       {(t) => {
-        // Guru kelas hanya melihat kelasnya sendiri; koordinator boleh berpindah kelas.
-        const level = t.level ?? (isLevel(k) ? k : 1);
+        // Guru kelas hanya melihat kelasnya sendiri; koordinator dan admin memilih kelas.
+        const all = seesAllClasses(t);
+        const room = roomForTeacher(t, sp.c ?? sp.k);
+        const level = room.level;
         const meta = classMeta(level);
-        const rows = listStudents(level);
+        const rows = listStudents(level, room.id);
+        const rooms = listRooms().map((r) => ({ id: r.id, name: r.name, level: r.level }));
         const waiting = rows.filter((r) => r.status === "submitted").length;
         const active = rows.filter((r) => r.progress && r.progress.last > 0).length;
         return (
           <div className="flex flex-col gap-8">
-            <PageHead icon="kelas" eyebrow="Kelas" title={`Kelas ${level}`} desc={`${meta.project} · ${meta.meetings} pertemuan × ${meta.minutes} menit`} right={t.level ? <span className="pil pil-isi">{t.nickname}</span> : <ClassTabs base="/guru" current={level} />} />
+            <PageHead icon="kelas" eyebrow="Kelas" title={room.name} desc={`Tingkat ${level} · ${meta.project} · ${meta.meetings} pertemuan × ${meta.minutes} menit`} right={all ? <RoomTabs base="/guru" current={room.id} /> : <span className="pil pil-isi">{t.nickname}</span>} />
 
             <div className="berurutan grid gap-4 sm:grid-cols-3">
               {[
@@ -45,7 +47,7 @@ export default async function GuruKelas({ searchParams }: { searchParams: Promis
                     <span className="label-kecil">Siswa</span>
                     <span className="label-kecil">Pertemuan terakhir</span>
                     <span className="label-kecil">Karya</span>
-                    <span className="label-kecil w-[218px]">{t.level ? "Kode orang tua" : "Pindah kelas"}</span>
+                    <span className="label-kecil w-[218px]">{all ? "Pindah kelas" : "Kode orang tua"}</span>
                   </div>
                   <ul className="berurutan divide-y divide-tinta/10">
                     {rows.map(({ user, progress, status, parentCode }) => {
@@ -70,10 +72,10 @@ export default async function GuruKelas({ searchParams }: { searchParams: Promis
                             )}
                           </div>
                           <div><Status status={status ?? undefined} /></div>
-                          {t.level ? (
-                            <span className="w-[218px] font-mono text-sm font-bold tracking-widest text-kobalt-tua" title="Berikan kode ini kepada orang tua untuk menghubungkan akun">{parentCode}</span>
+                          {all ? (
+                            <MoveStudent id={user.id} roomId={room.id} rooms={rooms} nickname={user.nickname} />
                           ) : (
-                            <MoveStudent id={user.id} level={level} nickname={user.nickname} />
+                            <span className="w-[218px] font-mono text-sm font-bold tracking-widest text-kobalt-tua" title="Berikan kode ini kepada orang tua untuk menghubungkan akun">{parentCode}</span>
                           )}
                         </li>
                       );
@@ -83,7 +85,7 @@ export default async function GuruKelas({ searchParams }: { searchParams: Promis
               )}
             </section>
 
-            <AddStudent level={level} />
+            <AddStudent roomId={room.id} roomName={room.name} />
           </div>
         );
       }}

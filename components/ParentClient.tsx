@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { post } from "@/lib/client";
 
-type Kid = { id: string; name: string; level: number };
+type Kid = { id: string; name: string; level: number; className?: string };
 
 /** Pemilih anak di bagian atas semua halaman orang tua. */
 export function ChildBar({ kids, selectedId }: { kids: Kid[]; selectedId: string }) {
@@ -29,11 +29,11 @@ export function ChildBar({ kids, selectedId }: { kids: Kid[]; selectedId: string
           }}
         >
           {kids.map((k) => (
-            <option key={k.id} value={k.id}>{k.name} · Kelas {k.level}</option>
+            <option key={k.id} value={k.id}>{k.name} · {k.className ?? `Kelas ${k.level}`}</option>
           ))}
         </select>
       ) : (
-        <span className="font-semibold">{kids[0].name} · Kelas {kids[0].level}</span>
+        <span className="font-semibold">{kids[0].name} · {kids[0].className ?? `Kelas ${kids[0].level}`}</span>
       )}
       <Link href="/ortu/kelas" className="tautan ml-auto text-sm">Tambah anak atau cari kelas →</Link>
     </div>

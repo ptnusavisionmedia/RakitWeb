@@ -1,5 +1,5 @@
 import { startSession } from "@/lib/auth";
-import { addLog, adminCreateUser, adminDeleteUser, adminLink, adminNewCode, adminResetProgress, adminResetSecret, adminUnlink, adminUpdateUser, getUser, homeFor, resetAllData } from "@/lib/db";
+import { addLog, adminCreateUser, adminDeleteUser, adminLink, adminNewCode, adminResetProgress, adminResetSecret, adminUnlink, adminUpdateUser, createRoom, deleteRoom, getRoom, getUser, homeFor, moveRoomStudents, resetAllData, updateRoom } from "@/lib/db";
 import { adminOrNull, fail, json, readJson } from "@/lib/api";
 
 export async function POST(req: Request) {
@@ -24,13 +24,13 @@ async function handle(req: Request) {
   const id = String(b.id ?? "");
   switch (b.action) {
     case "create": {
-      const r = adminCreateUser({ role: String(b.role ?? ""), nickname: String(b.nickname ?? ""), username: String(b.username ?? ""), secret: String(b.secret ?? ""), level: b.level, avatar: String(b.avatar ?? "") });
+      const r = adminCreateUser({ role: String(b.role ?? ""), nickname: String(b.nickname ?? ""), username: String(b.username ?? ""), secret: String(b.secret ?? ""), roomId: b.roomId, avatar: String(b.avatar ?? "") });
       if (!r.ok) return fail(r.error);
-      addLog(a, "Tambah pengguna", `${r.user.nickname} (${r.user.username}) sebagai ${r.user.role}`);
+      addLog(a, "Tambah pengguna", `${r.user.nickname} (${r.user.username}) sebagai ${r.user.role}${r.user.classId ? ` di [${getRoom(r.user.classId)?.name}]` : ""}`);
       return json({ ok: true, id: r.user.id, username: r.user.username });
     }
     case "update": {
-      const r = adminUpdateUser(a, id, { nickname: b.nickname, username: b.username, level: b.level, avatar: b.avatar });
+      const r = adminUpdateUser(a, id, { nickname: b.nickname, username: b.username, roomId: b.roomId, avatar: b.avatar });
       if (!r.ok) return fail(r.error);
       addLog(a, "Ubah pengguna", who(id));
       return json({ ok: true });
@@ -75,6 +75,33 @@ async function handle(req: Request) {
       addLog(a, "Lihat sebagai pengguna", who(id));
       await startSession(u.id, a.id);
       return json({ ok: true, redirect: homeFor(u) });
+    }
+    case "room-create": {
+      const r = createRoom({ name: b.name, level: b.level, teacherId: b.teacherId });
+      if (!r.ok) return fail(r.error);
+      addLog(a, "Tambah kelas", `[${r.room.name}] tingkat ${r.room.level}`);
+      return json({ ok: true, id: r.room.id, redirect: `/admin/kelas/${r.room.id}` });
+    }
+    case "room-update": {
+      const before = getRoom(id)?.name;
+      const r = updateRoom(id, { name: b.name, level: b.level, teacherId: b.teacherId });
+      if (!r.ok) return fail(r.error);
+      const after = getRoom(id)?.name;
+      addLog(a, "Ubah kelas", before && before !== after ? `[${before}] menjadi [${after}]` : `[${after}]`);
+      return json({ ok: true });
+    }
+    case "room-delete": {
+      const r = deleteRoom(id);
+      if (!r.ok) return fail(r.error);
+      addLog(a, "Hapus kelas", `[${r.name}]`);
+      return json({ ok: true, redirect: "/admin/kelas" });
+    }
+    case "room-move": {
+      const to = String(b.to ?? "");
+      const r = moveRoomStudents(id, to);
+      if (!r.ok) return fail(r.error);
+      addLog(a, "Pindahkan siswa satu kelas", `${r.moved} siswa dari [${getRoom(id)?.name}] ke [${getRoom(to)?.name}]`);
+      return json({ ok: true, moved: r.moved });
     }
     case "reset-all": {
       if (b.confirm !== "PULIHKAN") return fail("Ketik PULIHKAN untuk mengonfirmasi.");

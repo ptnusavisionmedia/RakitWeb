@@ -3,8 +3,7 @@ import { CreateUser } from "@/components/AdminClient";
 import { Monogram } from "@/components/Monogram";
 import { AdminShell } from "@/components/Shell";
 import { PageHead, Status } from "@/components/Status";
-import { isLevel } from "@/lib/curriculum/types";
-import { listUsers } from "@/lib/db";
+import { getRoom, listRooms, listUsers } from "@/lib/db";
 import { ROLE_LABEL } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -17,16 +16,15 @@ const PERAN = [
   { v: "admin", t: "Admin" },
 ];
 
-export default async function AdminPengguna({ searchParams }: { searchParams: Promise<{ peran?: string; k?: string; q?: string; demo?: string }> }) {
+export default async function AdminPengguna({ searchParams }: { searchParams: Promise<{ peran?: string; c?: string; q?: string; demo?: string }> }) {
   const sp = await searchParams;
   const role = PERAN.some((p) => p.v === sp.peran) ? (sp.peran as string) : "";
-  const k = Number(sp.k);
-  const level = isLevel(k) ? k : undefined;
+  const room = getRoom(sp.c);
   const q = (sp.q ?? "").slice(0, 40);
   const demo = sp.demo === "1";
   const qs = (o: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
-    const all = { peran: role || undefined, k: level ? String(level) : undefined, q: q || undefined, demo: demo ? "1" : undefined, ...o };
+    const all = { peran: role || undefined, c: room?.id, q: q || undefined, demo: demo ? "1" : undefined, ...o };
     for (const [key, v] of Object.entries(all)) if (v) p.set(key, v);
     const s = p.toString();
     return s ? `/admin/pengguna?${s}` : "/admin/pengguna";
@@ -34,7 +32,8 @@ export default async function AdminPengguna({ searchParams }: { searchParams: Pr
   return (
     <AdminShell>
       {() => {
-        const rows = listUsers({ role, level, q, demo });
+        const rows = listUsers({ role, roomId: room?.id, q, demo });
+        const rooms = listRooms().map((r) => ({ id: r.id, name: r.name, level: r.level }));
         return (
           <div className="flex flex-col gap-8">
             <PageHead icon="kelas" eyebrow="Pengguna" title="Semua akun" desc="Tambah, ubah, atur ulang kata sandi, hubungkan orang tua, masuk sebagai pengguna, atau hapus akun." />
@@ -42,7 +41,7 @@ export default async function AdminPengguna({ searchParams }: { searchParams: Pr
             <section aria-label="Saring pengguna" className="flex flex-col gap-3">
               <div className="segmen" role="group" aria-label="Saring peran">
                 {PERAN.map((p) => (
-                  <Link key={p.v} href={qs({ peran: p.v || undefined, k: p.v === "student" || p.v === "teacher" || !p.v ? (level ? String(level) : undefined) : undefined })} aria-pressed={role === p.v}>
+                  <Link key={p.v} href={qs({ peran: p.v || undefined })} aria-pressed={role === p.v}>
                     {p.t}
                   </Link>
                 ))}
@@ -55,9 +54,9 @@ export default async function AdminPengguna({ searchParams }: { searchParams: Pr
                 </div>
                 <div className="w-40">
                   <label htmlFor="kls" className="label-kecil">Kelas</label>
-                  <select id="kls" name="k" className="isian mt-1" defaultValue={level ? String(level) : ""}>
+                  <select id="kls" name="c" className="isian mt-1" defaultValue={room?.id ?? ""}>
                     <option value="">Semua kelas</option>
-                    {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>Kelas {n}</option>)}
+                    {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                   </select>
                 </div>
                 <label className="flex min-h-11 items-center gap-2 text-sm">
@@ -65,7 +64,7 @@ export default async function AdminPengguna({ searchParams }: { searchParams: Pr
                   Tampilkan akun demo
                 </label>
                 <button type="submit" className="tombol-2">Terapkan</button>
-                {(q || level || demo) && <Link href={qs({ q: undefined, k: undefined, demo: undefined })} className="tautan text-sm">Hapus saringan</Link>}
+                {(q || room || demo) && <Link href={qs({ q: undefined, c: undefined, demo: undefined })} className="tautan text-sm">Hapus saringan</Link>}
               </form>
             </section>
 
@@ -96,7 +95,7 @@ export default async function AdminPengguna({ searchParams }: { searchParams: Pr
                             </span>
                           </td>
                           <td className="px-4 py-3"><span className={`pil ${u.role === "admin" ? "pil-tinta" : u.role === "teacher" ? "pil-biru" : ""}`}>{ROLE_LABEL[u.role]}</span></td>
-                          <td className="px-4 py-3">{u.level ? `Kelas ${u.level}` : u.role === "teacher" ? "Semua (koordinator)" : "-"}</td>
+                          <td className="px-4 py-3">{u.classId && u.className ? <Link href={`/admin/kelas/${u.classId}`} className="text-kobalt hover:underline">{u.className}</Link> : u.role === "teacher" ? "Semua (koordinator)" : "-"}</td>
                           <td className="px-4 py-3">
                             {u.role === "student" ? (
                               <span className="flex flex-wrap items-center gap-2">
@@ -120,7 +119,7 @@ export default async function AdminPengguna({ searchParams }: { searchParams: Pr
               )}
             </section>
 
-            <CreateUser defaultRole={role || "student"} />
+            <CreateUser defaultRole={role || "student"} rooms={rooms} defaultRoom={room?.id} />
           </div>
         );
       }}

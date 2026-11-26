@@ -4,7 +4,7 @@ import { StudentShell } from "@/components/Shell";
 import { PageHead, Status } from "@/components/Status";
 import { SubmitButton, WorkView } from "@/components/WorkView";
 import { classMeta } from "@/lib/curriculum";
-import { gallery, getProgress, getWork } from "@/lib/db";
+import { gallery, getProgress, getWork, roomOf } from "@/lib/db";
 import { ago } from "@/lib/format";
 import { Ikon, IkonKotak } from "@/components/Deco";
 
@@ -19,7 +19,9 @@ export default function KaryakuPage() {
         const p = getProgress(s.id, s.level);
         const resume = `/belajar/${p && p.last > 0 ? p.last : 1}`;
         const changed = w.submittedAt && w.updatedAt > w.submittedAt;
-        const pub = gallery(s.level);
+        const room = roomOf(s);
+        const roomName = room?.name ?? `kelas ${s.level}`;
+        const pub = gallery(s.level, room?.id);
         return (
           <div className="flex flex-col gap-8">
             <PageHead
@@ -73,7 +75,7 @@ export default function KaryakuPage() {
 
               <aside id="galeri" aria-labelledby="galeri-judul" className="scroll-mt-24">
                 <div className="mb-3 flex items-baseline justify-between">
-                  <h2 id="galeri-judul" className="text-lg">Galeri kelas {s.level}</h2>
+                  <h2 id="galeri-judul" className="text-lg">Galeri {roomName}</h2>
                   <span className="text-sm text-tinta-2">{pub.length} karya</span>
                 </div>
                 {pub.length === 0 ? (
@@ -94,7 +96,7 @@ export default function KaryakuPage() {
                     ))}
                   </ul>
                 )}
-                <p className="mt-3 flex items-center gap-1.5 text-xs text-tinta-2"><Ikon name="kunci" size={14} />Galeri hanya bisa dibuka oleh anggota kelas {s.level}.</p>
+                <p className="mt-3 flex items-center gap-1.5 text-xs text-tinta-2"><Ikon name="kunci" size={14} />Galeri hanya bisa dibuka oleh anggota {roomName}.</p>
               </aside>
             </div>
           </div>

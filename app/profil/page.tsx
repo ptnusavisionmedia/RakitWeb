@@ -3,7 +3,7 @@ import { StudentShell } from "@/components/Shell";
 import { ProfileForm } from "@/components/ProfileForm";
 import Link from "next/link";
 import { classMeta } from "@/lib/curriculum";
-import { sentReports } from "@/lib/db";
+import { roomOf, sentReports } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +19,7 @@ export default function ProfilPage() {
               <div className="min-w-0 flex-1">
                 <p className="label-kecil">Profil</p>
                 <h1 className="text-2xl">{s.nickname}</h1>
-                <p className="redup">Kelas <b className="text-white">{s.level}</b> · {meta.project}</p>
+                <p className="redup"><b className="text-white">{roomOf(s)?.name ?? `Kelas ${s.level}`}</b> · {meta.project}</p>
               </div>
               <dl className="flex gap-8 text-sm">
                 <div><dt className="redup">Pertemuan</dt><dd className="font-judul text-lg font-bold">{meta.meetings}</dd></div>

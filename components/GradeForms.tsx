@@ -124,7 +124,7 @@ export function ReportActions({ studentId, status, catatan, ready }: { studentId
 }
 
 /** Membuat atau mengirim rapor seluruh siswa di kelas sekaligus. */
-export function ClassReportActions({ level }: { level: number }) {
+export function ClassReportActions({ roomId }: { roomId: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<{ done: string[]; skipped: string[]; mode: "make" | "send" } | null>(null);
@@ -133,7 +133,7 @@ export function ClassReportActions({ level }: { level: number }) {
     if (mode === "send" && !window.confirm("Kirim semua rapor yang sudah dibuat ke siswa dan orang tua masing-masing?")) return;
     setBusy(true);
     setErr("");
-    const r = await post<{ ok: boolean; error?: string; done?: string[]; skipped?: string[] }>("/api/teacher", { action: "class-reports", level, mode });
+    const r = await post<{ ok: boolean; error?: string; done?: string[]; skipped?: string[] }>("/api/teacher", { action: "class-reports", roomId, mode });
     setBusy(false);
     if (r.ok) {
       setRes({ done: r.done ?? [], skipped: r.skipped ?? [], mode });

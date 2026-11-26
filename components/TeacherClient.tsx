@@ -2,36 +2,39 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { CLASSES } from "@/lib/curriculum/types";
 import { post } from "@/lib/client";
 
-export function MoveStudent({ id, level, nickname }: { id: string; level: number; nickname: string }) {
+export function MoveStudent({ id, roomId, rooms, nickname }: { id: string; roomId: string; rooms: { id: string; name: string }[]; nickname: string }) {
   const router = useRouter();
-  const [to, setTo] = useState(level);
+  const [to, setTo] = useState(roomId);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
   return (
-    <span className="flex items-center gap-2">
-      <select aria-label={`Kelas baru untuk ${nickname}`} className="isian !min-h-9 !w-28 !py-1 text-sm" value={to} onChange={(e) => setTo(Number(e.target.value))}>
-        {CLASSES.map((c) => <option key={c.level} value={c.level}>Kelas {c.level}</option>)}
+    <span className="flex flex-wrap items-center gap-2">
+      <select aria-label={`Kelas baru untuk ${nickname}`} className="isian !min-h-9 !w-32 !py-1 text-sm" value={to} onChange={(e) => setTo(e.target.value)}>
+        {rooms.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
       </select>
       <button
         type="button"
         className="tombol-2 tombol-kecil"
-        disabled={busy || to === level}
+        disabled={busy || to === roomId}
         onClick={async () => {
           setBusy(true);
-          await post("/api/teacher", { action: "move", id, level: to });
+          setErr("");
+          const r = await post("/api/teacher", { action: "move", id, roomId: to });
           setBusy(false);
+          if (!r.ok) setErr(r.error ?? "Gagal memindah.");
           router.refresh();
         }}
       >
         Pindahkan
       </button>
+      {err && <span role="alert" className="text-xs font-semibold text-salah-tua">{err}</span>}
     </span>
   );
 }
 
-export function AddStudent({ level }: { level: number }) {
+export function AddStudent({ roomId, roomName }: { roomId: string; roomName: string }) {
   const router = useRouter();
   const [nick, setNick] = useState("");
   const [pin, setPin] = useState("");
@@ -42,9 +45,9 @@ export function AddStudent({ level }: { level: number }) {
       className="kartu overflow-hidden"
       onSubmit={async (e) => {
         e.preventDefault();
-        const r = await post<{ ok: boolean; error?: string; username?: string }>("/api/teacher", { action: "create-student", nickname: nick, pin, avatar: av, level });
+        const r = await post<{ ok: boolean; error?: string; username?: string }>("/api/teacher", { action: "create-student", nickname: nick, pin, avatar: av, roomId });
         if (r.ok) {
-          setMsg({ ok: true, t: `Siswa ditambahkan ke kelas ${level}. Nama masuk: ${r.username} · PIN sesuai yang Anda isi.` });
+          setMsg({ ok: true, t: `Siswa ditambahkan ke ${roomName}. Nama masuk: ${r.username} · PIN sesuai yang Anda isi.` });
           setNick("");
           setPin("");
           router.refresh();
@@ -52,7 +55,7 @@ export function AddStudent({ level }: { level: number }) {
       }}
     >
       <div className="p-6">
-      <h3 className="text-lg">Tambah siswa ke kelas {level}</h3>
+      <h3 className="text-lg">Tambah siswa ke {roomName}</h3>
       <p className="mt-1 text-sm text-tinta-2">Siswa baru mulai dari pertemuan 1. Nama masuk dibuat otomatis dari nama panggilan.</p>
       <div className="mt-4 flex flex-wrap gap-4">
         <div className="min-w-[180px] max-w-sm flex-1">

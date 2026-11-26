@@ -20,6 +20,8 @@ export type User = {
   nickname: string;
   avatar: string;
   level?: ClassLevel;
+  /** Siswa dan wali kelas: rombel (kelas) tempat ia berada. Tingkat (level) mengikuti rombel. */
+  classId?: string;
   demo?: boolean;
   /** Akun guru: kelas yang diajar. Kosong berarti koordinator yang melihat semua kelas. */
   /** Akun orang tua: id siswa yang didampingi (bisa lintas kelas). */
@@ -71,8 +73,10 @@ export type Work = {
   history?: { at: string; kind: "perbaikan" | "galeri"; text: string }[];
   updatedAt: string;
 };
+/** Rombel: kelas yang dibuat admin, misalnya "Kelas 2A". Materi mengikuti tingkatnya (1 sampai 6). */
+export type Room = { id: string; name: string; level: ClassLevel; createdAt: string };
 export type LogEntry = { at: string; actor: string; actorName: string; action: string; detail: string };
-type DB = { users: User[]; progress: Progress[]; works: Work[]; reports?: Report[]; logs?: LogEntry[]; deleted?: string[]; v?: number };
+type DB = { users: User[]; progress: Progress[]; works: Work[]; reports?: Report[]; logs?: LogEntry[]; deleted?: string[]; rooms?: Room[]; v?: number };
 
 const FILE = process.env.VERCEL ? path.join(os.tmpdir(), "rakitweb-db.json") : path.join(process.cwd(), ".data", "db.json");
 
@@ -92,7 +96,7 @@ function verify(secret: string, stored: string): boolean {
 // ---------- storage ----------
 const g = globalThis as unknown as { __rw_db?: DB; __rw_mig?: number };
 /** Naikkan angka ini setiap kali migrate() berubah, agar server yang sudah berjalan (mode dev) ikut memperbarui data. */
-const MIGRATION = 4;
+const MIGRATION = 5;
 
 function seed(): DB {
   const now = Date.now();
@@ -218,6 +222,31 @@ function migrate(db: DB) {
   addUser({ id: "u-demo-admin", role: "admin", username: "admin-demo", nickname: "Admin (demo)", avatar: "a3", demo: true, secret: hash(crypto.randomBytes(8).toString("hex")) });
   addUser({ id: "u-demo-ortu", role: "parent", username: "ortu-demo", nickname: "Orang tua (demo)", avatar: "a2", demo: true, childIds: ["u-mira2"], secret: hash(crypto.randomBytes(8).toString("hex")) });
 
+  // Rombel bawaan: satu kelas untuk setiap tingkat
+  db.rooms ??= [];
+  for (const lv of [1, 2, 3, 4, 5, 6] as ClassLevel[]) {
+    if (!db.rooms.some((r) => r.level === lv)) {
+      db.rooms.push({ id: db.rooms.some((r) => r.id === `k${lv}`) ? uid("k") : `k${lv}`, name: `Kelas ${lv}`, level: lv, createdAt: nowIso() });
+      dirty = true;
+    }
+  }
+  const firstRoom = (lv: ClassLevel) => db.rooms!.find((r) => r.id === `k${lv}` && r.level === lv) ?? db.rooms!.find((r) => r.level === lv)!;
+  for (const u of db.users) {
+    if (u.role !== "student" && u.role !== "teacher") continue;
+    const room = u.classId ? db.rooms.find((r) => r.id === u.classId) : undefined;
+    if (room) {
+      if (u.level !== room.level) {
+        u.level = room.level;
+        dirty = true;
+      }
+    } else if (u.level) {
+      u.classId = firstRoom(u.level).id;
+      dirty = true;
+    } else if (u.classId) {
+      delete u.classId;
+      dirty = true;
+    }
+  }
   for (const u of db.users) {
     if (u.role === "parent" && !u.childIds) {
       u.childIds = u.childId ? [u.childId] : [];
@@ -240,10 +269,39 @@ const uid = (p: string) => `${p}-${crypto.randomBytes(5).toString("hex")}`;
 const nowIso = () => new Date().toISOString();
 
 // ---------- pengguna ----------
-export const publicUser = (u: User) => ({ id: u.id, role: u.role, username: u.username, nickname: u.nickname, avatar: u.avatar, level: u.level, demo: u.demo });
+export const publicUser = (u: User) => ({ id: u.id, role: u.role, username: u.username, nickname: u.nickname, avatar: u.avatar, level: u.level, classId: u.classId, demo: u.demo });
 export const kidsOf = (u: User): string[] => u.childIds ?? (u.childId ? [u.childId] : []);
 /** Guru kelas hanya boleh mengelola kelasnya. Koordinator (tanpa kelas) boleh semua. */
 export const canTeach = (t: User, level: number) => t.role === "admin" || (t.role === "teacher" && (!t.level || t.level === level));
+
+// ---------- rombel (kelas) ----------
+const byRoom = (a: Room, b: Room) => a.level - b.level || a.name.localeCompare(b.name, "id", { numeric: true });
+export const listRooms = (): Room[] => [...(load().rooms ?? [])].sort(byRoom);
+export const getRoom = (id?: string | null): Room | undefined => (id ? load().rooms?.find((r) => r.id === id) : undefined);
+/** Rombel utama untuk satu tingkat (dipakai akun demo dan data lama). */
+export const roomForLevel = (level: ClassLevel): Room => {
+  const all = listRooms();
+  return all.find((r) => r.id === `k${level}` && r.level === level) ?? all.find((r) => r.level === level)!;
+};
+export const roomOf = (u: Pick<User, "classId" | "level">): Room | undefined => getRoom(u.classId) ?? (u.level ? roomForLevel(u.level) : undefined);
+/** Koordinator: guru tanpa kelas. Admin juga boleh semua. */
+export const seesAllClasses = (t: User) => t.role === "admin" || (t.role === "teacher" && !t.level && !t.classId);
+export const canTeachRoom = (t: User, roomId: string) => seesAllClasses(t) || (t.role === "teacher" && !!t.classId && t.classId === roomId);
+/** Guru kelas hanya mengelola siswa di rombelnya. */
+export const canTeachStudent = (t: User, s: User) => s.role === "student" && !!s.level && (seesAllClasses(t) || (t.role === "teacher" && !!t.classId && roomOf(s)?.id === t.classId));
+/** Rombel yang sedang dibuka di halaman guru. Guru kelas selalu kelasnya sendiri; koordinator dan admin memilih lewat ?c=. */
+export const roomForTeacher = (t: User, wanted?: string | null): Room => {
+  if (!seesAllClasses(t)) {
+    const own = getRoom(t.classId);
+    if (own) return own;
+  }
+  return getRoom(wanted) ?? (wanted && /^[1-6]$/.test(wanted) ? roomForLevel(Number(wanted) as ClassLevel) : undefined) ?? listRooms()[0];
+};
+export const teachersOfRoom = (id: string) => load().users.filter((u) => u.role === "teacher" && !u.demo && u.classId === id);
+export const teacherNameOfRoom = (id?: string) => {
+  const names = id ? teachersOfRoom(id).map((u) => u.nickname) : [];
+  return names.length ? names.join(", ") : "Wali kelas";
+};
 export const homeFor = (u: { role: Role }) => (u.role === "admin" ? "/admin" : u.role === "teacher" ? "/guru" : u.role === "parent" ? "/ortu" : "/belajar");
 
 export function getUser(id: string): User | undefined {
@@ -263,8 +321,12 @@ export function demoStudent(level: ClassLevel): User {
   const id = `u-demo-k${level}`;
   let u = db.users.find((x) => x.id === id);
   if (!u) {
-    u = { id, role: "student", username: `demo-k${level}`, nickname: `${DEMO_NAMES[level - 1]} (demo)`, avatar: DEMO_AVATARS[level - 1], level, demo: true, secret: hash(crypto.randomBytes(8).toString("hex")), parentCode: newCode() };
+    u = { id, role: "student", username: `demo-k${level}`, nickname: `${DEMO_NAMES[level - 1]} (demo)`, avatar: DEMO_AVATARS[level - 1], level, classId: roomForLevel(level).id, demo: true, secret: hash(crypto.randomBytes(8).toString("hex")), parentCode: newCode() };
     db.users.push(u);
+    save();
+  } else if (!getRoom(u.classId) || u.level !== level) {
+    u.level = level;
+    u.classId = roomForLevel(level).id;
     save();
   }
   return u;
@@ -272,23 +334,27 @@ export function demoStudent(level: ClassLevel): User {
 /** Guru demo per kelas. Kelas 2 dan 5 memakai guru contoh dengan siswa dan karya lengkap. */
 export function demoTeacher(level: ClassLevel): User {
   const db = load();
-  const fixed = db.users.find((x) => x.role === "teacher" && x.level === level && !x.demo);
+  const room = roomForLevel(level);
+  const fixed = db.users.find((x) => x.role === "teacher" && x.classId === room.id && !x.demo);
   if (fixed) return fixed;
   const id = `u-demo-guru-k${level}`;
   let u = db.users.find((x) => x.id === id);
   if (!u) {
-    u = { id, role: "teacher", username: `guru-demo-k${level}`, nickname: `Guru Kelas ${level}`, avatar: "a2", level, demo: true, secret: hash(crypto.randomBytes(8).toString("hex")) };
+    u = { id, role: "teacher", username: `guru-demo-k${level}`, nickname: `Guru Kelas ${level}`, avatar: "a2", level, classId: room.id, demo: true, secret: hash(crypto.randomBytes(8).toString("hex")) };
     db.users.push(u);
+    save();
+  } else if (u.classId !== room.id) {
+    u.classId = room.id;
+    u.level = level;
     save();
   }
   return u;
 }
-export const teacherNameOf = (level: number) => load().users.find((x) => x.role === "teacher" && x.level === level && !x.demo)?.nickname ?? `Guru Kelas ${level}`;
 
-export function listStudents(level?: ClassLevel) {
+export function listStudents(level?: ClassLevel, roomId?: string) {
   const db = load();
   return db.users
-    .filter((u) => u.role === "student" && (!level || u.level === level))
+    .filter((u) => u.role === "student" && (!level || u.level === level) && (!roomId || roomOf(u)?.id === roomId))
     .map((u) => {
       const p = u.level ? db.progress.find((x) => x.userId === u.id && x.level === u.level) : undefined;
       const w = u.level ? db.works.find((x) => x.userId === u.id && x.level === u.level) : undefined;
@@ -298,23 +364,26 @@ export function listStudents(level?: ClassLevel) {
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12) || "siswa";
 
-export function createStudent(input: { nickname: string; avatar: string; level: number; pin: string }): { ok: true; username: string } | { ok: false; error: string } {
+export function createStudent(input: { nickname: string; avatar: string; roomId: string; pin: string }): { ok: true; username: string } | { ok: false; error: string } {
   const nickname = input.nickname.trim().slice(0, 20);
   if (!nickname) return { ok: false, error: "Nama panggilan wajib diisi." };
-  if (!isLevel(input.level)) return { ok: false, error: "Kelas tidak valid." };
+  const room = getRoom(input.roomId);
+  if (!room) return { ok: false, error: "Kelas tidak valid." };
   if (!/^\d{4}$/.test(input.pin)) return { ok: false, error: "PIN harus 4 angka." };
   const db = load();
-  let username = `${slug(nickname)}${input.level}`;
+  let username = `${slug(nickname)}${room.level}`;
   let i = 2;
-  while (db.users.some((u) => u.username === username)) username = `${slug(nickname)}${input.level}${i++}`;
-  db.users.push({ id: uid("u"), role: "student", username, nickname, avatar: input.avatar || "a1", level: input.level, secret: hash(input.pin), parentCode: newCode() });
+  while (db.users.some((u) => u.username === username)) username = `${slug(nickname)}${room.level}${i++}`;
+  db.users.push({ id: uid("u"), role: "student", username, nickname, avatar: /^a[1-6]$/.test(input.avatar) ? input.avatar : "a1", level: room.level, classId: room.id, secret: hash(input.pin), parentCode: newCode() });
   save();
   return { ok: true, username };
 }
-export function moveStudent(id: string, level: number): boolean {
+export function moveStudent(id: string, roomId: string): boolean {
   const u = getUser(id);
-  if (!u || u.role !== "student" || !isLevel(level)) return false;
-  u.level = level;
+  const room = getRoom(roomId);
+  if (!u || u.role !== "student" || !room) return false;
+  u.level = room.level;
+  u.classId = room.id;
   save();
   return true;
 }
@@ -456,16 +525,17 @@ export function reviewWork(id: string, action: "revise" | "publish", text: strin
 export function getWorkById(id: string): Work | undefined {
   return load().works.find((w) => w.id === id);
 }
-export function listWorks(level?: ClassLevel) {
+export function listWorks(level?: ClassLevel, roomId?: string) {
   const db = load();
   return db.works
     .filter((w) => (!level || w.level === level) && w.submitted)
     .map((w) => ({ work: w, user: getUser(w.userId)! }))
-    .filter((x) => x.user)
+    .filter((x) => x.user && x.user.level === x.work.level && (!roomId || roomOf(x.user)?.id === roomId))
     .sort((a, b) => (b.work.submittedAt ?? "").localeCompare(a.work.submittedAt ?? ""));
 }
-export function gallery(level: ClassLevel) {
-  return listWorks(level).filter((x) => x.work.status === "published" && x.work.published);
+/** Galeri satu rombel: hanya karya teman sekelas yang sudah dipublikasikan. */
+export function gallery(level: ClassLevel, roomId?: string) {
+  return listWorks(level, roomId).filter((x) => x.work.status === "published" && x.work.published);
 }
 export function workSummary(userId: string, level: ClassLevel) {
   return load().works.find((w) => w.userId === userId && w.level === level);
@@ -476,7 +546,7 @@ export function workSummary(userId: string, level: ClassLevel) {
 export function addParentNote(teacher: User, studentId: string, text: string): { ok: boolean; error?: string } {
   const s = getUser(studentId);
   if (!s || s.role !== "student" || !s.level) return { ok: false, error: "Siswa tidak ditemukan." };
-  if (!canTeach(teacher, s.level)) return { ok: false, error: "Siswa ini bukan di kelas Anda." };
+  if (!canTeachStudent(teacher, s)) return { ok: false, error: "Siswa ini bukan di kelas Anda." };
   const t = text.trim().slice(0, 500);
   if (!t) return { ok: false, error: "Tulis catatan untuk orang tua." };
   (s.parentNotes ??= []).unshift({ text: t, at: nowIso() });
@@ -490,7 +560,7 @@ export function childrenOf(parent: User) {
   return kidsOf(parent)
     .map((id) => getUser(id))
     .filter((u): u is User => !!u && u.role === "student" && !!u.level)
-    .map((u) => ({ id: u.id, name: u.nickname.replace(/ \(demo\)$/, ""), level: u.level as ClassLevel, avatar: u.avatar }));
+    .map((u) => ({ id: u.id, name: u.nickname.replace(/ \(demo\)$/, ""), level: u.level as ClassLevel, className: roomOf(u)?.name ?? `Kelas ${u.level}`, avatar: u.avatar }));
 }
 
 /** Ringkasan satu anak untuk halaman orang tua. */
@@ -504,7 +574,8 @@ export function childOverview(childId: string) {
     ...(child.parentNotes ?? []).map((n) => ({ at: n.at, kind: "catatan" as const, text: n.text })),
     ...(work?.history ?? []).map((h) => ({ at: h.at, kind: h.kind, text: h.text })),
   ].sort((a, b) => b.at.localeCompare(a.at));
-  return { child: publicUser(child), level, progress, work, notes, teacherName: teacherNameOf(level) };
+  const room = roomOf(child);
+  return { child: publicUser(child), level, className: room?.name ?? `Kelas ${level}`, progress, work, notes, teacherName: teacherNameOfRoom(room?.id) };
 }
 
 /** Akun demo orang tua. Setiap masuk selalu mulai dari satu anak (Mira, kelas 2). */
@@ -535,35 +606,38 @@ export function demoAdmin(): User {
 /** Direktori kelas untuk pencarian orang tua. Tidak membuka daftar nama siswa. */
 export function classDirectory() {
   const db = load();
-  return ([1, 2, 3, 4, 5, 6] as ClassLevel[]).map((level) => {
+  return listRooms().map((room) => {
+    const level = room.level;
     const meta = classMeta(level);
     return {
+      id: room.id,
+      name: room.name,
       level,
       project: meta.project,
       meetings: meta.meetings,
       minutes: meta.minutes,
       mode: meta.mode,
-      teacher: teacherNameOf(level),
-      students: db.users.filter((u) => u.role === "student" && u.level === level && !u.demo).length,
+      teacher: teacherNameOfRoom(room.id),
+      students: db.users.filter((u) => u.role === "student" && !u.demo && roomOf(u)?.id === room.id).length,
     };
   });
 }
 
 /** Mencari siswa menurut nama panggilan. Minimal 2 huruf; hasil hanya nama dan kelas. */
-export function searchStudents(q: string, level?: ClassLevel) {
+export function searchStudents(q: string, roomId?: string) {
   const needle = q.trim().toLowerCase();
   if (needle.length < 2) return [];
   return load()
-    .users.filter((u) => u.role === "student" && !u.demo && u.level && (!level || u.level === level) && u.nickname.toLowerCase().includes(needle))
+    .users.filter((u) => u.role === "student" && !u.demo && u.level && (!roomId || roomOf(u)?.id === roomId) && u.nickname.toLowerCase().includes(needle))
     .slice(0, 12)
-    .map((u) => ({ id: u.id, name: u.nickname, level: u.level as ClassLevel }));
+    .map((u) => ({ id: u.id, name: u.nickname, level: u.level as ClassLevel, className: roomOf(u)?.name ?? `Kelas ${u.level}` }));
 }
 
 /** Kode orang tua untuk contoh pada mode demo saja. */
 export function demoCodes() {
   return load()
     .users.filter((u) => u.role === "student" && !u.demo && (u.level === 2 || u.level === 5) && u.parentCode)
-    .map((u) => ({ name: u.nickname, level: u.level as ClassLevel, code: u.parentCode as string }));
+    .map((u) => ({ name: u.nickname, level: u.level as ClassLevel, className: roomOf(u)?.name ?? `Kelas ${u.level}`, code: u.parentCode as string }));
 }
 
 const tries = globalThis as unknown as { __rw_tries?: Map<string, { n: number; until: number }> };
@@ -661,7 +735,7 @@ const cleanNote = (t: unknown) => (typeof t === "string" ? t.trim().slice(0, 300
 export function gradeLesson(t: User, studentId: string, no: number, score: unknown, note: unknown): { ok: boolean; error?: string } {
   const s = getUser(studentId);
   if (!s || s.role !== "student" || !s.level) return { ok: false, error: "Siswa tidak ditemukan." };
-  if (!canTeach(t, s.level)) return { ok: false, error: "Siswa ini bukan di kelas Anda." };
+  if (!canTeachStudent(t, s)) return { ok: false, error: "Siswa ini bukan di kelas Anda." };
   if (!Number.isInteger(no) || no < 1 || no > classMeta(s.level).meetings) return { ok: false, error: "Pertemuan tidak valid." };
   const p = getProgress(s.id, s.level);
   if (!p || !p.completed.includes(no)) return { ok: false, error: "Pertemuan ini belum diselesaikan siswa." };
@@ -683,7 +757,7 @@ export function gradeLesson(t: User, studentId: string, no: number, score: unkno
 export function gradeComponent(t: User, studentId: string, kind: "karya" | "sikap", score: unknown, note: unknown): { ok: boolean; error?: string } {
   const s = getUser(studentId);
   if (!s || s.role !== "student" || !s.level) return { ok: false, error: "Siswa tidak ditemukan." };
-  if (!canTeach(t, s.level)) return { ok: false, error: "Siswa ini bukan di kelas Anda." };
+  if (!canTeachStudent(t, s)) return { ok: false, error: "Siswa ini bukan di kelas Anda." };
   if (kind !== "karya" && kind !== "sikap") return { ok: false, error: "Jenis nilai tidak dikenal." };
   s.grades ??= {};
   if (score === null || score === "") {
@@ -703,8 +777,9 @@ const stripDemo = (n: string) => n.replace(/ \(demo\)$/, "");
 /** Rekap lengkap satu siswa untuk guru: tiap pertemuan, jawaban, nilai, karya, dan ringkasan nilai akhir. */
 export function studentSheet(t: User, studentId: string) {
   const s = getUser(studentId);
-  if (!s || s.role !== "student" || !s.level || !canTeach(t, s.level)) return null;
+  if (!s || s.role !== "student" || !s.level || !canTeachStudent(t, s)) return null;
   const level = s.level;
+  const room = roomOf(s);
   const p = getProgress(s.id, level);
   const work = workSummary(s.id, level);
   const rows = lessonsOf(level).map((l) => {
@@ -718,7 +793,7 @@ export function studentSheet(t: User, studentId: string) {
   const sikap = s.grades?.sikap ?? null;
   const final = tugas !== null && karya && sikap ? Math.round((tugas * BOBOT.tugas + karya.score * BOBOT.karya + sikap.score * BOBOT.sikap) / 100) : null;
   const report = (load().reports ?? []).find((r) => r.studentId === s.id && r.term === termLabel()) ?? null;
-  return { student: publicUser(s), name: s.nickname, level, rows, done: rows.filter((r) => r.done).length, total: rows.length, tugas, karya, sikap, final, work, report, parentCode: s.parentCode };
+  return { student: publicUser(s), name: s.nickname, level, roomId: room?.id ?? "", className: room?.name ?? `Kelas ${level}`, rows, done: rows.filter((r) => r.done).length, total: rows.length, tugas, karya, sikap, final, work, report, parentCode: s.parentCode };
 }
 
 export type ReportStatus = "belum" | "draf" | "terkirim" | "diperbarui";
@@ -765,7 +840,7 @@ export function makeReport(t: User, studentId: string, catatan?: string): { ok: 
   const pd = predikat(sh.final);
   const data: ReportData = {
     term,
-    teacherName: t.role === "teacher" ? t.nickname : teacherNameOf(sh.level),
+    teacherName: t.role === "teacher" && t.classId === sh.roomId ? t.nickname : teacherNameOfRoom(sh.roomId),
     ...base,
     predikat: pd.p,
     label: pd.label,
@@ -792,7 +867,7 @@ export function makeReport(t: User, studentId: string, catatan?: string): { ok: 
 export function sendReport(t: User, studentId: string): { ok: boolean; error?: string } {
   const s = getUser(studentId);
   if (!s || s.role !== "student" || !s.level) return { ok: false, error: "Siswa tidak ditemukan." };
-  if (!canTeach(t, s.level)) return { ok: false, error: "Siswa ini bukan di kelas Anda." };
+  if (!canTeachStudent(t, s)) return { ok: false, error: "Siswa ini bukan di kelas Anda." };
   const r = (load().reports ?? []).find((x) => x.studentId === studentId && x.term === termLabel());
   if (!r) return { ok: false, error: "Buat rapor terlebih dahulu." };
   r.sent = { data: JSON.parse(JSON.stringify(r.data)), at: nowIso() };
@@ -809,21 +884,23 @@ export function sentReports(studentId: string) {
 }
 
 /** Rekap seluruh kelas: setiap siswa, nilai tiap pertemuan, dan status rapor. */
-export function classSheet(t: User, level: ClassLevel) {
-  if (!canTeach(t, level)) return null;
-  const lessons = lessonsOf(level);
-  const rows = listStudents(level).map(({ user }) => {
+export function classSheet(t: User, roomId: string) {
+  const room = getRoom(roomId);
+  if (!room || !canTeachRoom(t, room.id)) return null;
+  const lessons = lessonsOf(room.level);
+  const rows = listStudents(room.level, room.id).map(({ user }) => {
     const sh = studentSheet(t, user.id)!;
     return { user, sh, cells: sh.rows.map((r) => ({ no: r.no, done: r.done, score: r.score, teacher: r.result?.teacherScore !== undefined })), status: reportStatus(sh.report) };
   });
-  return { lessons, rows };
+  return { room, lessons, rows };
 }
 
-export function reportsForClass(t: User, level: ClassLevel, action: "make" | "send") {
+export function reportsForClass(t: User, roomId: string, action: "make" | "send") {
   const ok: string[] = [];
   const skipped: string[] = [];
-  if (!canTeach(t, level)) return { ok, skipped: ["Kelas ini bukan kelas Anda."] };
-  for (const { user } of listStudents(level)) {
+  const room = getRoom(roomId);
+  if (!room || !canTeachRoom(t, room.id)) return { ok, skipped: ["Kelas ini bukan kelas Anda."] };
+  for (const { user } of listStudents(room.level, room.id)) {
     const name = stripDemo(user.nickname);
     if (action === "make") {
       const r = makeReport(t, user.id);
@@ -894,7 +971,6 @@ function seedGrades(db: DB) {
 }
 
 // ---------- admin super ----------
-const LEVELS = [1, 2, 3, 4, 5, 6] as ClassLevel[];
 const USERNAME_RE = /^[a-z0-9._-]{3,20}$/;
 const ROLES: Role[] = ["student", "teacher", "parent", "admin"];
 type R<T = object> = ({ ok: true } & T) | { ok: false; error: string };
@@ -913,57 +989,101 @@ const pctDone = (userId: string, level: ClassLevel) => {
   return Math.round((100 * (p?.completed.length ?? 0)) / classMeta(level).meetings);
 };
 
+/** Ringkasan satu rombel: angka utama untuk dasbor dan halaman kelas. Akun demo tidak dihitung. */
+function roomSummary(db: DB, room: Room) {
+  const studs = db.users.filter((u) => u.role === "student" && !u.demo && roomOf(u)?.id === room.id);
+  const ids = new Set(studs.map((s) => s.id));
+  const works = db.works.filter((w) => w.level === room.level && ids.has(w.userId));
+  return {
+    id: room.id,
+    name: room.name,
+    level: room.level,
+    project: classMeta(room.level).project,
+    teachers: teachersOfRoom(room.id).map((u) => ({ id: u.id, name: u.nickname })),
+    students: studs.length,
+    avg: studs.length ? Math.round(studs.reduce((a, s) => a + pctDone(s.id, room.level), 0) / studs.length) : 0,
+    waiting: works.filter((w) => w.status === "submitted").length,
+    published: works.filter((w) => w.status === "published").length,
+    reportsSent: (db.reports ?? []).filter((r) => r.level === room.level && r.sent && ids.has(r.studentId)).length,
+  };
+}
+export type RoomSummary = ReturnType<typeof roomSummary>;
+
 /** Angka ringkas seluruh sekolah untuk dasbor admin. Akun demo tidak dihitung. */
 export function adminStats() {
   const db = load();
   const real = db.users.filter((u) => !u.demo);
   const count = (r: Role) => real.filter((u) => u.role === r).length;
-  const perClass = LEVELS.map((level) => {
-    const studs = real.filter((u) => u.role === "student" && u.level === level);
-    const ids = new Set(studs.map((s) => s.id));
-    const works = db.works.filter((w) => w.level === level && ids.has(w.userId));
-    return {
-      level,
-      project: classMeta(level).project,
-      teachers: real.filter((u) => u.role === "teacher" && u.level === level).map((u) => ({ id: u.id, name: u.nickname })),
-      students: studs.length,
-      avg: studs.length ? Math.round(studs.reduce((a, s) => a + pctDone(s.id, level), 0) / studs.length) : 0,
-      waiting: works.filter((w) => w.status === "submitted").length,
-      published: works.filter((w) => w.status === "published").length,
-      reportsSent: (db.reports ?? []).filter((r) => r.level === level && r.sent && ids.has(r.studentId)).length,
-    };
-  });
   const realIds = new Set(real.map((u) => u.id));
   return {
     students: count("student"),
     teachers: count("teacher"),
     parents: count("parent"),
     admins: count("admin"),
+    rooms: (db.rooms ?? []).length,
     demo: db.users.length - real.length,
     works: db.works.filter((w) => w.submitted && realIds.has(w.userId)).length,
     waiting: db.works.filter((w) => w.status === "submitted" && realIds.has(w.userId)).length,
     reports: (db.reports ?? []).filter((r) => r.sent && realIds.has(r.studentId)).length,
-    perClass,
+    perClass: listRooms().map((r) => roomSummary(db, r)),
   };
 }
 
-export type UserRow = ReturnType<typeof publicUser> & { parentCode?: string; links: number; pct?: number; status?: Status };
+export function roomStats(id: string) {
+  const room = getRoom(id);
+  return room ? roomSummary(load(), room) : null;
+}
 
-/** Daftar semua pengguna dengan saringan peran, kelas, dan kata kunci. */
-export function listUsers(f: { role?: string; level?: number; q?: string; demo?: boolean } = {}): UserRow[] {
+export type UserRow = ReturnType<typeof publicUser> & { className?: string; parentCode?: string; links: number; pct?: number; status?: Status };
+
+/** Daftar semua pengguna dengan saringan peran, kelas (rombel), dan kata kunci. */
+export function listUsers(f: { role?: string; roomId?: string; q?: string; demo?: boolean } = {}): UserRow[] {
   const db = load();
   const q = (f.q ?? "").trim().toLowerCase();
   const order: Record<Role, number> = { admin: 0, teacher: 1, student: 2, parent: 3 };
+  const inRoom = (u: User) => {
+    if (!f.roomId) return true;
+    if (u.role === "student" || u.role === "teacher") return !!u.level && roomOf(u)?.id === f.roomId;
+    if (u.role === "parent") return kidsOf(u).some((id) => {
+      const k = db.users.find((x) => x.id === id);
+      return !!k && roomOf(k)?.id === f.roomId;
+    });
+    return false;
+  };
   return db.users
-    .filter((u) => (!f.role || u.role === f.role) && (!f.level || u.level === f.level) && (f.demo || !u.demo) && (!q || u.nickname.toLowerCase().includes(q) || u.username.includes(q)))
-    .sort((a, b) => order[a.role] - order[b.role] || (a.level ?? 0) - (b.level ?? 0) || a.nickname.localeCompare(b.nickname))
-    .map((u) => ({
+    .filter((u) => (!f.role || u.role === f.role) && (f.demo || !u.demo) && inRoom(u) && (!q || u.nickname.toLowerCase().includes(q) || u.username.includes(q)))
+    .map((u) => ({ u, room: u.level ? roomOf(u) : undefined }))
+    .sort((a, b) => order[a.u.role] - order[b.u.role] || (a.room && b.room ? byRoom(a.room, b.room) : (a.u.level ?? 0) - (b.u.level ?? 0)) || a.u.nickname.localeCompare(b.u.nickname))
+    .map(({ u, room }) => ({
       ...publicUser(u),
+      className: room?.name,
       parentCode: u.role === "student" ? u.parentCode : undefined,
       links: u.role === "parent" ? kidsOf(u).length : u.role === "student" ? db.users.filter((p) => p.role === "parent" && kidsOf(p).includes(u.id)).length : 0,
       pct: u.role === "student" && u.level ? pctDone(u.id, u.level) : undefined,
       status: u.role === "student" && u.level ? workSummary(u.id, u.level)?.status : undefined,
     }));
+}
+
+/** Orang tua yang anaknya berada di satu rombel, beserta nama anaknya. */
+export function parentsOfRoom(roomId: string) {
+  const db = load();
+  return db.users
+    .filter((p) => p.role === "parent" && !p.demo)
+    .map((p) => ({ p, kids: kidsOf(p).map((id) => db.users.find((x) => x.id === id)).filter((k): k is User => !!k && k.role === "student" && roomOf(k)?.id === roomId) }))
+    .filter((x) => x.kids.length > 0)
+    .map(({ p, kids }) => ({ id: p.id, name: p.nickname, username: p.username, kids: kids.map((k) => k.nickname) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Log yang menyangkut satu rombel: nama kelas, wali kelas, atau siswa di dalamnya. */
+export function roomLogs(roomId: string, n = 40) {
+  const room = getRoom(roomId);
+  if (!room) return [];
+  const db = load();
+  const members = db.users.filter((u) => (u.role === "student" || u.role === "teacher") && roomOf(u)?.id === roomId && u.level);
+  const keys = [`[${room.name}]`, ...members.map((u) => `(${u.username})`)];
+  const ids = new Set(members.filter((u) => u.role === "teacher").map((u) => u.id));
+  return (db.logs ?? []).filter((l) => ids.has(l.actor) || keys.some((k) => l.detail.includes(k))).slice(0, n);
 }
 
 /** Rincian satu pengguna untuk halaman admin. */
@@ -976,9 +1096,11 @@ export function userDetail(id: string) {
   const progress = u.role === "student" && u.level ? getProgress(u.id, u.level) : undefined;
   const work = u.role === "student" && u.level ? workSummary(u.id, u.level) : undefined;
   const report = u.role === "student" ? (db.reports ?? []).find((r) => r.studentId === u.id && r.term === termLabel()) : undefined;
-  const students = u.role === "parent" ? db.users.filter((s) => s.role === "student" && !s.demo && s.level && !kidsOf(u).includes(s.id)).map((s) => ({ id: s.id, name: s.nickname, level: s.level as ClassLevel })) : [];
+  const students = u.role === "parent" ? db.users.filter((s) => s.role === "student" && !s.demo && s.level && !kidsOf(u).includes(s.id)).map((s) => ({ id: s.id, name: s.nickname, level: s.level as ClassLevel, className: roomOf(s)?.name ?? `Kelas ${s.level}` })) : [];
+  const room = u.level ? roomOf(u) : undefined;
   return {
     user: publicUser(u),
+    room: room ? { id: room.id, name: room.name, level: room.level } : null,
     parentCode: u.parentCode,
     grades: u.grades,
     parents,
@@ -1000,33 +1122,39 @@ function guardTarget(actor: User, target: User): string | null {
   return null;
 }
 
-export function adminCreateUser(input: { role: string; nickname: string; username: string; secret: string; level?: unknown; avatar?: string }): R<{ user: User }> {
+/** Menentukan rombel dari isian formulir. Guru tanpa rombel berarti koordinator. */
+function pickRoom(role: Role, raw: unknown): { ok: true; room?: Room } | { ok: false; error: string } {
+  if (role !== "student" && role !== "teacher") return { ok: true };
+  const id = typeof raw === "string" ? raw.trim() : "";
+  if (!id) return role === "student" ? { ok: false, error: "Pilih kelas siswa." } : { ok: true };
+  const room = getRoom(id);
+  return room ? { ok: true, room } : { ok: false, error: "Kelas tidak ditemukan." };
+}
+
+export function adminCreateUser(input: { role: string; nickname: string; username: string; secret: string; roomId?: unknown; avatar?: string }): R<{ user: User }> {
   const role = input.role as Role;
   if (!ROLES.includes(role)) return { ok: false, error: "Peran tidak dikenal." };
   const nickname = input.nickname.trim().slice(0, 20);
   if (!nickname) return { ok: false, error: "Nama panggilan wajib diisi." };
   const db = load();
-  const lv = Number(input.level);
-  let level: ClassLevel | undefined;
-  if (role === "student") {
-    if (!isLevel(lv)) return { ok: false, error: "Pilih kelas siswa." };
-    level = lv;
-  } else if (role === "teacher" && lv) {
-    if (!isLevel(lv)) return { ok: false, error: "Kelas tidak valid." };
-    level = lv;
-  }
+  const picked = pickRoom(role, input.roomId);
+  if (!picked.ok) return picked;
+  const room = picked.room;
   let username = input.username.trim().toLowerCase();
-  if (!username && role === "student") {
-    username = `${slug(nickname)}${level}`;
+  if (!username && role === "student" && room) {
+    username = `${slug(nickname)}${room.level}`;
     let i = 2;
-    while (db.users.some((u) => u.username === username)) username = `${slug(nickname)}${level}${i++}`;
+    while (db.users.some((u) => u.username === username)) username = `${slug(nickname)}${room.level}${i++}`;
   }
   if (!USERNAME_RE.test(username)) return { ok: false, error: "Nama masuk 3 sampai 20 karakter: huruf kecil, angka, titik, garis bawah, atau strip." };
   if (db.users.some((u) => u.username === username)) return { ok: false, error: "Nama masuk ini sudah dipakai." };
   const bad = checkSecret(role, input.secret);
   if (bad) return { ok: false, error: bad };
   const user: User = { id: uid("u"), role, username, nickname, avatar: /^a[1-6]$/.test(input.avatar ?? "") ? (input.avatar as string) : "a1", secret: hash(input.secret) };
-  if (level) user.level = level;
+  if (room) {
+    user.level = room.level;
+    user.classId = room.id;
+  }
   if (role === "student") user.parentCode = newCode();
   if (role === "parent") user.childIds = [];
   db.users.push(user);
@@ -1034,7 +1162,7 @@ export function adminCreateUser(input: { role: string; nickname: string; usernam
   return { ok: true, user };
 }
 
-export function adminUpdateUser(actor: User, id: string, input: { nickname?: unknown; username?: unknown; level?: unknown; avatar?: unknown }): R {
+export function adminUpdateUser(actor: User, id: string, input: { nickname?: unknown; username?: unknown; roomId?: unknown; avatar?: unknown }): R {
   const db = load();
   const u = getUser(id);
   if (!u) return { ok: false, error: "Pengguna tidak ditemukan." };
@@ -1048,22 +1176,111 @@ export function adminUpdateUser(actor: User, id: string, input: { nickname?: unk
     if (!USERNAME_RE.test(username)) return { ok: false, error: "Nama masuk 3 sampai 20 karakter: huruf kecil, angka, titik, garis bawah, atau strip." };
     if (db.users.some((x) => x.username === username && x.id !== u.id)) return { ok: false, error: "Nama masuk ini sudah dipakai." };
   }
-  let level = u.level;
-  if (u.role === "student" || u.role === "teacher") {
-    const lv = input.level === undefined ? (u.level ?? 0) : Number(input.level || 0);
-    if (u.role === "student" && !isLevel(lv)) return { ok: false, error: "Pilih kelas siswa." };
-    if (u.role === "teacher" && lv && !isLevel(lv)) return { ok: false, error: "Kelas tidak valid." };
-    level = lv ? (lv as ClassLevel) : undefined;
+  let room: Room | undefined = u.level ? roomOf(u) : undefined;
+  if ((u.role === "student" || u.role === "teacher") && input.roomId !== undefined) {
+    const picked = pickRoom(u.role, input.roomId);
+    if (!picked.ok) return picked;
+    room = picked.room;
   }
   u.nickname = nickname;
   u.username = username;
   if (typeof input.avatar === "string" && /^a[1-6]$/.test(input.avatar)) u.avatar = input.avatar;
   if (u.role === "student" || u.role === "teacher") {
-    if (level) u.level = level;
-    else delete u.level;
+    if (room) {
+      u.level = room.level;
+      u.classId = room.id;
+    } else {
+      delete u.level;
+      delete u.classId;
+    }
   }
   save();
   return { ok: true };
+}
+
+// ---------- kelola rombel ----------
+const cleanRoomName = (raw: unknown) => (typeof raw === "string" ? raw.trim().replace(/\s+/g, " ").slice(0, 30) : "");
+
+/** Admin membuat kelas baru, misalnya "Kelas 2B". Wali kelas boleh langsung dipilih. */
+export function createRoom(input: { name: unknown; level: unknown; teacherId?: unknown }): R<{ room: Room }> {
+  const db = load();
+  const name = cleanRoomName(input.name);
+  if (name.length < 2) return { ok: false, error: "Nama kelas minimal 2 karakter." };
+  const level = Number(input.level);
+  if (!isLevel(level)) return { ok: false, error: "Pilih tingkat 1 sampai 6." };
+  if ((db.rooms ?? []).some((r) => r.name.toLowerCase() === name.toLowerCase())) return { ok: false, error: "Nama kelas ini sudah dipakai." };
+  let teacher: User | undefined;
+  if (typeof input.teacherId === "string" && input.teacherId) {
+    teacher = getUser(input.teacherId);
+    if (!teacher || teacher.role !== "teacher" || teacher.demo) return { ok: false, error: "Guru tidak ditemukan." };
+  }
+  const room: Room = { id: uid("k"), name, level, createdAt: nowIso() };
+  (db.rooms ??= []).push(room);
+  if (teacher) {
+    teacher.classId = room.id;
+    teacher.level = level;
+  }
+  save();
+  return { ok: true, room };
+}
+
+/** Mengubah nama kelas, tingkat (hanya bila belum ada siswa), atau menambah wali kelas. */
+export function updateRoom(id: string, input: { name?: unknown; level?: unknown; teacherId?: unknown }): R {
+  const db = load();
+  const room = getRoom(id);
+  if (!room) return { ok: false, error: "Kelas tidak ditemukan." };
+  const name = input.name === undefined ? room.name : cleanRoomName(input.name);
+  if (name.length < 2) return { ok: false, error: "Nama kelas minimal 2 karakter." };
+  if ((db.rooms ?? []).some((r) => r.id !== room.id && r.name.toLowerCase() === name.toLowerCase())) return { ok: false, error: "Nama kelas ini sudah dipakai." };
+  const level = input.level === undefined ? room.level : Number(input.level);
+  if (!isLevel(level)) return { ok: false, error: "Pilih tingkat 1 sampai 6." };
+  const members = db.users.filter((u) => (u.role === "student" || u.role === "teacher") && u.level && roomOf(u)?.id === room.id);
+  if (level !== room.level) {
+    if (members.some((u) => u.role === "student")) return { ok: false, error: "Tingkat hanya bisa diubah selama kelas belum punya siswa." };
+    if (!(db.rooms ?? []).some((r) => r.id !== room.id && r.level === room.level)) return { ok: false, error: `Tingkat ${room.level} harus tetap punya minimal satu kelas.` };
+  }
+  let teacher: User | undefined;
+  if (typeof input.teacherId === "string" && input.teacherId) {
+    teacher = getUser(input.teacherId);
+    if (!teacher || teacher.role !== "teacher" || teacher.demo) return { ok: false, error: "Guru tidak ditemukan." };
+  }
+  room.name = name;
+  room.level = level;
+  for (const u of members) u.level = level;
+  if (teacher) {
+    teacher.classId = room.id;
+    teacher.level = level;
+  }
+  save();
+  return { ok: true };
+}
+
+/** Kelas hanya bisa dihapus bila sudah kosong dan tingkatnya masih punya kelas lain. */
+export function deleteRoom(id: string): R<{ name: string }> {
+  const db = load();
+  const room = getRoom(id);
+  if (!room) return { ok: false, error: "Kelas tidak ditemukan." };
+  const members = db.users.filter((u) => (u.role === "student" || u.role === "teacher") && u.classId === room.id);
+  const studs = members.filter((u) => u.role === "student").length;
+  const teach = members.filter((u) => u.role === "teacher").length;
+  if (studs || teach) return { ok: false, error: `Kelas masih berisi ${[studs && `${studs} siswa`, teach && `${teach} guru`].filter(Boolean).join(" dan ")}. Pindahkan dulu ke kelas lain.` };
+  if (!(db.rooms ?? []).some((r) => r.id !== room.id && r.level === room.level)) return { ok: false, error: `Tingkat ${room.level} harus tetap punya minimal satu kelas.` };
+  db.rooms = (db.rooms ?? []).filter((r) => r.id !== room.id);
+  save();
+  return { ok: true, name: room.name };
+}
+
+/** Memindahkan semua siswa dari satu kelas ke kelas lain dengan tingkat yang sama. */
+export function moveRoomStudents(fromId: string, toId: string): R<{ moved: number }> {
+  const from = getRoom(fromId);
+  const to = getRoom(toId);
+  if (!from || !to) return { ok: false, error: "Kelas tidak ditemukan." };
+  if (from.id === to.id) return { ok: false, error: "Pilih kelas tujuan yang berbeda." };
+  if (from.level !== to.level) return { ok: false, error: "Siswa hanya bisa dipindah ke kelas dengan tingkat yang sama." };
+  const studs = load().users.filter((u) => u.role === "student" && u.level && roomOf(u)?.id === from.id);
+  for (const s of studs) s.classId = to.id;
+  save();
+  return { ok: true, moved: studs.length };
 }
 
 export function adminResetSecret(actor: User, id: string, secret: string): R {

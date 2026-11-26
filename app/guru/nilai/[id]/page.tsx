@@ -26,12 +26,12 @@ export default async function GuruNilaiSiswa({ params }: { params: Promise<{ id:
         return (
           <div className="flex flex-col gap-8">
             <div>
-              <Link href={`/guru/nilai?k=${sh.level}`} className="tautan">← Rekap nilai Kelas {sh.level}</Link>
+              <Link href={`/guru/nilai?c=${sh.roomId}`} className="tautan">← Rekap nilai {sh.className}</Link>
               <div className="mt-5 flex flex-wrap items-center gap-4 border-b border-tinta/10 pb-6">
                 <Monogram name={sh.name} size={52} />
                 <div className="min-w-0 flex-1">
                   <h1 className="text-2xl">{sh.name}</h1>
-                  <p className="text-sm text-tinta-2">Kelas {sh.level} · {sh.done} dari {sh.total} pertemuan selesai · Kode orang tua <code className="font-mono font-bold tracking-widest text-kobalt-tua">{sh.parentCode}</code></p>
+                  <p className="text-sm text-tinta-2">{sh.className} · {sh.done} dari {sh.total} pertemuan selesai · Kode orang tua <code className="font-mono font-bold tracking-widest text-kobalt-tua">{sh.parentCode}</code></p>
                 </div>
                 <span className="pil pil-biru">Rapor: {STATUS_RAPOR[status]}</span>
               </div>

@@ -62,7 +62,7 @@ export async function AdminShell({ children, wide }: { children: (a: User) => Pr
 }
 
 export type ChildData = NonNullable<ReturnType<typeof childOverview>>;
-type Kid = { id: string; name: string; level: number; avatar: string };
+type Kid = { id: string; name: string; level: number; className?: string; avatar: string };
 
 function ParentFrame({ parent, kids, selected, children }: { parent: User; kids: Kid[]; selected: Kid | null; children: React.ReactNode }) {
   return (

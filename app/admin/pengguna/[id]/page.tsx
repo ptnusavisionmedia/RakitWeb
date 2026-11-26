@@ -4,7 +4,7 @@ import { ActionButton, EditUser, LinkStudent, ResetSecret } from "@/components/A
 import { AdminShell } from "@/components/Shell";
 import { PageHead, Stat, Status } from "@/components/Status";
 import { classMeta } from "@/lib/curriculum/types";
-import { userDetail } from "@/lib/db";
+import { listRooms, userDetail } from "@/lib/db";
 import { ago, ROLE_LABEL, tgl } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +30,7 @@ export default async function AdminPenggunaDetail({ params }: { params: Promise<
               icon="kelas"
               eyebrow={`${ROLE_LABEL[u.role]}${u.demo ? " · akun demo" : ""}`}
               title={u.nickname}
-              desc={`Nama masuk: ${u.username}${u.level ? ` · Kelas ${u.level}` : u.role === "teacher" ? " · Koordinator semua kelas" : ""}`}
+              desc={`Nama masuk: ${u.username}${d.room ? ` · ${d.room.name} (tingkat ${d.room.level})` : u.role === "teacher" ? " · Koordinator semua kelas" : ""}`}
               right={
                 u.role !== "admin" ? (
                   <ActionButton body={{ action: "impersonate", id: u.id }} label={`Masuk sebagai ${u.nickname}`} tone="1" />
@@ -53,7 +53,7 @@ export default async function AdminPenggunaDetail({ params }: { params: Promise<
 
             <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,380px)]">
               <div className="flex flex-col gap-6">
-                {!lockedAdmin && <EditUser id={u.id} role={u.role} nickname={u.nickname} username={u.username} level={u.level} demo={u.demo} />}
+                {!lockedAdmin && <EditUser id={u.id} role={u.role} nickname={u.nickname} username={u.username} roomId={d.room?.id} rooms={listRooms().map((r) => ({ id: r.id, name: r.name, level: r.level }))} demo={u.demo} />}
 
                 {u.role === "student" && (
                   <section className="kartu p-6" aria-labelledby="ortu">
@@ -89,7 +89,7 @@ export default async function AdminPenggunaDetail({ params }: { params: Promise<
                       <ul className="mt-3 divide-y divide-tinta/10">
                         {d.kids.map((k) => (
                           <li key={k.id} className="flex flex-wrap items-center justify-between gap-3 py-2.5">
-                            <Link href={`/admin/pengguna/${k.id}`} className="font-semibold text-kobalt hover:underline">{k.name} · Kelas {k.level}</Link>
+                            <Link href={`/admin/pengguna/${k.id}`} className="font-semibold text-kobalt hover:underline">{k.name} · {k.className}</Link>
                             <ActionButton body={{ action: "unlink", id: u.id, studentId: k.id }} label="Lepas" confirm={`Lepas ${k.name} dari akun ini?`} />
                           </li>
                         ))}
@@ -104,9 +104,15 @@ export default async function AdminPenggunaDetail({ params }: { params: Promise<
                     <h2 className="text-lg">Alat guru</h2>
                     <p className="mt-1 text-sm text-tinta-2">Buka kelas, nilai, dan karya yang diajar guru ini.</p>
                     <div className="mt-4 flex flex-wrap gap-3">
-                      <Link href={`/guru?k=${u.level ?? 1}`} className="tombol-2 tombol-kecil">Kelas</Link>
-                      <Link href={`/guru/nilai?k=${u.level ?? 1}`} className="tombol-2 tombol-kecil">Nilai</Link>
-                      <Link href={`/guru/tinjau${u.level ? `?k=${u.level}` : ""}`} className="tombol-2 tombol-kecil">Tinjau karya</Link>
+                      {d.room ? (
+                        <>
+                          <Link href={`/admin/kelas/${d.room.id}`} className="tombol-2 tombol-kecil">Data {d.room.name}</Link>
+                          <Link href={`/guru/nilai?c=${d.room.id}`} className="tombol-2 tombol-kecil">Nilai</Link>
+                          <Link href={`/guru/tinjau?c=${d.room.id}`} className="tombol-2 tombol-kecil">Tinjau karya</Link>
+                        </>
+                      ) : (
+                        <Link href="/admin/kelas" className="tombol-2 tombol-kecil">Semua kelas</Link>
+                      )}
                     </div>
                   </section>
                 )}
