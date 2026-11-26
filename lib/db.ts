@@ -9,7 +9,7 @@ import { BOBOT, buildActivityResult, buildSelf, clampScore, lessonAuto, lessonFi
 import { defaultDoc, sanitizeDoc, type VisualDoc } from "./page";
 import { starterFiles, type Files } from "./starter";
 
-export type Role = "student" | "teacher" | "parent";
+export type Role = "student" | "teacher" | "parent" | "admin";
 export type Status = "draft" | "submitted" | "revision" | "published";
 export type Content = VisualDoc | Files;
 
@@ -71,7 +71,8 @@ export type Work = {
   history?: { at: string; kind: "perbaikan" | "galeri"; text: string }[];
   updatedAt: string;
 };
-type DB = { users: User[]; progress: Progress[]; works: Work[]; reports?: Report[]; v?: number };
+export type LogEntry = { at: string; actor: string; actorName: string; action: string; detail: string };
+type DB = { users: User[]; progress: Progress[]; works: Work[]; reports?: Report[]; logs?: LogEntry[]; deleted?: string[]; v?: number };
 
 const FILE = process.env.VERCEL ? path.join(os.tmpdir(), "rakitweb-db.json") : path.join(process.cwd(), ".data", "db.json");
 
@@ -91,7 +92,7 @@ function verify(secret: string, stored: string): boolean {
 // ---------- storage ----------
 const g = globalThis as unknown as { __rw_db?: DB; __rw_mig?: number };
 /** Naikkan angka ini setiap kali migrate() berubah, agar server yang sudah berjalan (mode dev) ikut memperbarui data. */
-const MIGRATION = 3;
+const MIGRATION = 4;
 
 function seed(): DB {
   const now = Date.now();
@@ -162,7 +163,7 @@ function migrate(db: DB) {
   let dirty = false;
   const pw = process.env.GURU_PASSWORD || "guru123";
   const addUser = (u: User) => {
-    if (db.users.some((x) => x.id === u.id)) return false;
+    if (db.users.some((x) => x.id === u.id) || db.deleted?.includes(u.id)) return false;
     db.users.push(u);
     dirty = true;
     return true;
@@ -212,6 +213,9 @@ function migrate(db: DB) {
     kiko.parentNotes = kiko.parentNotes ?? [{ text: "Kiko sangat bersemangat memilih gambar dan warna. Di rumah, ajak Kiko menceritakan alasan ia memilih hobinya.", at: dayIso(2) }];
   }
   // Akun demo orang tua tidak terikat kelas; setiap masuk dimulai dari satu anak
+  // Admin super: akun asli dan akun demo
+  addUser({ id: "u-admin", role: "admin", username: "admin", nickname: "Admin Sekolah", avatar: "a3", secret: hash(process.env.ADMIN_PASSWORD || "admin123") });
+  addUser({ id: "u-demo-admin", role: "admin", username: "admin-demo", nickname: "Admin (demo)", avatar: "a3", demo: true, secret: hash(crypto.randomBytes(8).toString("hex")) });
   addUser({ id: "u-demo-ortu", role: "parent", username: "ortu-demo", nickname: "Orang tua (demo)", avatar: "a2", demo: true, childIds: ["u-mira2"], secret: hash(crypto.randomBytes(8).toString("hex")) });
 
   for (const u of db.users) {
@@ -239,8 +243,8 @@ const nowIso = () => new Date().toISOString();
 export const publicUser = (u: User) => ({ id: u.id, role: u.role, username: u.username, nickname: u.nickname, avatar: u.avatar, level: u.level, demo: u.demo });
 export const kidsOf = (u: User): string[] => u.childIds ?? (u.childId ? [u.childId] : []);
 /** Guru kelas hanya boleh mengelola kelasnya. Koordinator (tanpa kelas) boleh semua. */
-export const canTeach = (t: User, level: number) => t.role === "teacher" && (!t.level || t.level === level);
-export const homeFor = (u: { role: Role }) => (u.role === "teacher" ? "/guru" : u.role === "parent" ? "/ortu" : "/belajar");
+export const canTeach = (t: User, level: number) => t.role === "admin" || (t.role === "teacher" && (!t.level || t.level === level));
+export const homeFor = (u: { role: Role }) => (u.role === "admin" ? "/admin" : u.role === "teacher" ? "/guru" : u.role === "parent" ? "/ortu" : "/belajar");
 
 export function getUser(id: string): User | undefined {
   return load().users.find((u) => u.id === id);
@@ -516,6 +520,18 @@ export function demoParent(): User {
   return p;
 }
 
+/** Akun demo admin super. Dibuat ulang bila belum ada. */
+export function demoAdmin(): User {
+  const db = load();
+  let u = db.users.find((x) => x.id === "u-demo-admin");
+  if (!u) {
+    u = { id: "u-demo-admin", role: "admin", username: "admin-demo", nickname: "Admin (demo)", avatar: "a3", demo: true, secret: hash(crypto.randomBytes(8).toString("hex")) };
+    db.users.push(u);
+    save();
+  }
+  return u;
+}
+
 /** Direktori kelas untuk pencarian orang tua. Tidak membuka daftar nama siswa. */
 export function classDirectory() {
   const db = load();
@@ -749,7 +765,7 @@ export function makeReport(t: User, studentId: string, catatan?: string): { ok: 
   const pd = predikat(sh.final);
   const data: ReportData = {
     term,
-    teacherName: t.nickname,
+    teacherName: t.role === "teacher" ? t.nickname : teacherNameOf(sh.level),
     ...base,
     predikat: pd.p,
     label: pd.label,
@@ -875,4 +891,272 @@ function seedGrades(db: DB) {
       if (made.ok && sid === "u-mira2") sendReport(t, sid);
     }
   }
+}
+
+// ---------- admin super ----------
+const LEVELS = [1, 2, 3, 4, 5, 6] as ClassLevel[];
+const USERNAME_RE = /^[a-z0-9._-]{3,20}$/;
+const ROLES: Role[] = ["student", "teacher", "parent", "admin"];
+type R<T = object> = ({ ok: true } & T) | { ok: false; error: string };
+
+/** Mencatat tindakan penting. Disimpan maksimal 500 entri terbaru. */
+export function addLog(actor: User | null, action: string, detail = "") {
+  const db = load();
+  (db.logs ??= []).unshift({ at: nowIso(), actor: actor?.id ?? "-", actorName: actor ? actor.nickname : "Sistem", action, detail: detail.slice(0, 240) });
+  if (db.logs.length > 500) db.logs.length = 500;
+  save();
+}
+export const recentLogs = (n = 50) => (load().logs ?? []).slice(0, n);
+
+const pctDone = (userId: string, level: ClassLevel) => {
+  const p = getProgress(userId, level);
+  return Math.round((100 * (p?.completed.length ?? 0)) / classMeta(level).meetings);
+};
+
+/** Angka ringkas seluruh sekolah untuk dasbor admin. Akun demo tidak dihitung. */
+export function adminStats() {
+  const db = load();
+  const real = db.users.filter((u) => !u.demo);
+  const count = (r: Role) => real.filter((u) => u.role === r).length;
+  const perClass = LEVELS.map((level) => {
+    const studs = real.filter((u) => u.role === "student" && u.level === level);
+    const ids = new Set(studs.map((s) => s.id));
+    const works = db.works.filter((w) => w.level === level && ids.has(w.userId));
+    return {
+      level,
+      project: classMeta(level).project,
+      teachers: real.filter((u) => u.role === "teacher" && u.level === level).map((u) => ({ id: u.id, name: u.nickname })),
+      students: studs.length,
+      avg: studs.length ? Math.round(studs.reduce((a, s) => a + pctDone(s.id, level), 0) / studs.length) : 0,
+      waiting: works.filter((w) => w.status === "submitted").length,
+      published: works.filter((w) => w.status === "published").length,
+      reportsSent: (db.reports ?? []).filter((r) => r.level === level && r.sent && ids.has(r.studentId)).length,
+    };
+  });
+  const realIds = new Set(real.map((u) => u.id));
+  return {
+    students: count("student"),
+    teachers: count("teacher"),
+    parents: count("parent"),
+    admins: count("admin"),
+    demo: db.users.length - real.length,
+    works: db.works.filter((w) => w.submitted && realIds.has(w.userId)).length,
+    waiting: db.works.filter((w) => w.status === "submitted" && realIds.has(w.userId)).length,
+    reports: (db.reports ?? []).filter((r) => r.sent && realIds.has(r.studentId)).length,
+    perClass,
+  };
+}
+
+export type UserRow = ReturnType<typeof publicUser> & { parentCode?: string; links: number; pct?: number; status?: Status };
+
+/** Daftar semua pengguna dengan saringan peran, kelas, dan kata kunci. */
+export function listUsers(f: { role?: string; level?: number; q?: string; demo?: boolean } = {}): UserRow[] {
+  const db = load();
+  const q = (f.q ?? "").trim().toLowerCase();
+  const order: Record<Role, number> = { admin: 0, teacher: 1, student: 2, parent: 3 };
+  return db.users
+    .filter((u) => (!f.role || u.role === f.role) && (!f.level || u.level === f.level) && (f.demo || !u.demo) && (!q || u.nickname.toLowerCase().includes(q) || u.username.includes(q)))
+    .sort((a, b) => order[a.role] - order[b.role] || (a.level ?? 0) - (b.level ?? 0) || a.nickname.localeCompare(b.nickname))
+    .map((u) => ({
+      ...publicUser(u),
+      parentCode: u.role === "student" ? u.parentCode : undefined,
+      links: u.role === "parent" ? kidsOf(u).length : u.role === "student" ? db.users.filter((p) => p.role === "parent" && kidsOf(p).includes(u.id)).length : 0,
+      pct: u.role === "student" && u.level ? pctDone(u.id, u.level) : undefined,
+      status: u.role === "student" && u.level ? workSummary(u.id, u.level)?.status : undefined,
+    }));
+}
+
+/** Rincian satu pengguna untuk halaman admin. */
+export function userDetail(id: string) {
+  const db = load();
+  const u = getUser(id);
+  if (!u) return null;
+  const parents = u.role === "student" ? db.users.filter((p) => p.role === "parent" && kidsOf(p).includes(u.id)).map((p) => ({ id: p.id, name: p.nickname, username: p.username, demo: !!p.demo })) : [];
+  const kids = u.role === "parent" ? childrenOf(u) : [];
+  const progress = u.role === "student" && u.level ? getProgress(u.id, u.level) : undefined;
+  const work = u.role === "student" && u.level ? workSummary(u.id, u.level) : undefined;
+  const report = u.role === "student" ? (db.reports ?? []).find((r) => r.studentId === u.id && r.term === termLabel()) : undefined;
+  const students = u.role === "parent" ? db.users.filter((s) => s.role === "student" && !s.demo && s.level && !kidsOf(u).includes(s.id)).map((s) => ({ id: s.id, name: s.nickname, level: s.level as ClassLevel })) : [];
+  return {
+    user: publicUser(u),
+    parentCode: u.parentCode,
+    grades: u.grades,
+    parents,
+    kids,
+    progress,
+    work,
+    report: reportStatus(report),
+    students,
+    logs: (db.logs ?? []).filter((l) => l.actor === u.id || l.detail.includes(`(${u.username})`)).slice(0, 15),
+  };
+}
+
+const checkSecret = (role: Role, secret: string) =>
+  role === "student" ? (/^\d{4}$/.test(secret) ? null : "PIN siswa harus 4 angka.") : secret.length < 6 || secret.length > 64 ? "Kata sandi 6 sampai 64 karakter." : null;
+
+/** Admin demo tidak boleh menyentuh akun admin asli, agar akun pengelola sekolah tetap aman. */
+function guardTarget(actor: User, target: User): string | null {
+  if (target.role === "admin" && actor.demo && !target.demo) return "Akun demo tidak dapat mengubah akun admin asli.";
+  return null;
+}
+
+export function adminCreateUser(input: { role: string; nickname: string; username: string; secret: string; level?: unknown; avatar?: string }): R<{ user: User }> {
+  const role = input.role as Role;
+  if (!ROLES.includes(role)) return { ok: false, error: "Peran tidak dikenal." };
+  const nickname = input.nickname.trim().slice(0, 20);
+  if (!nickname) return { ok: false, error: "Nama panggilan wajib diisi." };
+  const db = load();
+  const lv = Number(input.level);
+  let level: ClassLevel | undefined;
+  if (role === "student") {
+    if (!isLevel(lv)) return { ok: false, error: "Pilih kelas siswa." };
+    level = lv;
+  } else if (role === "teacher" && lv) {
+    if (!isLevel(lv)) return { ok: false, error: "Kelas tidak valid." };
+    level = lv;
+  }
+  let username = input.username.trim().toLowerCase();
+  if (!username && role === "student") {
+    username = `${slug(nickname)}${level}`;
+    let i = 2;
+    while (db.users.some((u) => u.username === username)) username = `${slug(nickname)}${level}${i++}`;
+  }
+  if (!USERNAME_RE.test(username)) return { ok: false, error: "Nama masuk 3 sampai 20 karakter: huruf kecil, angka, titik, garis bawah, atau strip." };
+  if (db.users.some((u) => u.username === username)) return { ok: false, error: "Nama masuk ini sudah dipakai." };
+  const bad = checkSecret(role, input.secret);
+  if (bad) return { ok: false, error: bad };
+  const user: User = { id: uid("u"), role, username, nickname, avatar: /^a[1-6]$/.test(input.avatar ?? "") ? (input.avatar as string) : "a1", secret: hash(input.secret) };
+  if (level) user.level = level;
+  if (role === "student") user.parentCode = newCode();
+  if (role === "parent") user.childIds = [];
+  db.users.push(user);
+  save();
+  return { ok: true, user };
+}
+
+export function adminUpdateUser(actor: User, id: string, input: { nickname?: unknown; username?: unknown; level?: unknown; avatar?: unknown }): R {
+  const db = load();
+  const u = getUser(id);
+  if (!u) return { ok: false, error: "Pengguna tidak ditemukan." };
+  const blocked = guardTarget(actor, u);
+  if (blocked) return { ok: false, error: blocked };
+  const nickname = String(input.nickname ?? u.nickname).trim().slice(0, 20);
+  if (!nickname) return { ok: false, error: "Nama panggilan wajib diisi." };
+  const username = String(input.username ?? u.username).trim().toLowerCase();
+  if (username !== u.username) {
+    if (u.demo) return { ok: false, error: "Nama masuk akun demo tidak dapat diubah." };
+    if (!USERNAME_RE.test(username)) return { ok: false, error: "Nama masuk 3 sampai 20 karakter: huruf kecil, angka, titik, garis bawah, atau strip." };
+    if (db.users.some((x) => x.username === username && x.id !== u.id)) return { ok: false, error: "Nama masuk ini sudah dipakai." };
+  }
+  let level = u.level;
+  if (u.role === "student" || u.role === "teacher") {
+    const lv = input.level === undefined ? (u.level ?? 0) : Number(input.level || 0);
+    if (u.role === "student" && !isLevel(lv)) return { ok: false, error: "Pilih kelas siswa." };
+    if (u.role === "teacher" && lv && !isLevel(lv)) return { ok: false, error: "Kelas tidak valid." };
+    level = lv ? (lv as ClassLevel) : undefined;
+  }
+  u.nickname = nickname;
+  u.username = username;
+  if (typeof input.avatar === "string" && /^a[1-6]$/.test(input.avatar)) u.avatar = input.avatar;
+  if (u.role === "student" || u.role === "teacher") {
+    if (level) u.level = level;
+    else delete u.level;
+  }
+  save();
+  return { ok: true };
+}
+
+export function adminResetSecret(actor: User, id: string, secret: string): R {
+  const u = getUser(id);
+  if (!u) return { ok: false, error: "Pengguna tidak ditemukan." };
+  const blocked = guardTarget(actor, u);
+  if (blocked) return { ok: false, error: blocked };
+  if (u.demo) return { ok: false, error: "Akun demo masuk lewat tombol coba, tanpa kata sandi." };
+  const bad = checkSecret(u.role, secret);
+  if (bad) return { ok: false, error: bad };
+  u.secret = hash(secret);
+  save();
+  return { ok: true };
+}
+
+export function adminDeleteUser(actor: User, id: string): R<{ name: string }> {
+  const db = load();
+  const u = getUser(id);
+  if (!u) return { ok: false, error: "Pengguna tidak ditemukan." };
+  if (u.id === actor.id) return { ok: false, error: "Anda tidak dapat menghapus akun sendiri." };
+  const blocked = guardTarget(actor, u);
+  if (blocked) return { ok: false, error: blocked };
+  if (u.role === "admin" && !u.demo && db.users.filter((x) => x.role === "admin" && !x.demo).length <= 1) return { ok: false, error: "Harus ada minimal satu akun admin." };
+  db.users = db.users.filter((x) => x.id !== u.id);
+  db.progress = db.progress.filter((p) => p.userId !== u.id);
+  db.works = db.works.filter((w) => w.userId !== u.id);
+  db.reports = (db.reports ?? []).filter((r) => r.studentId !== u.id);
+  for (const p of db.users) if (p.role === "parent" && kidsOf(p).includes(u.id)) p.childIds = kidsOf(p).filter((x) => x !== u.id);
+  // Akun bawaan yang dihapus tidak dibuat ulang saat server dimulai lagi.
+  if (!u.demo) (db.deleted ??= []).push(u.id);
+  save();
+  return { ok: true, name: `${u.nickname} (${u.username})` };
+}
+
+export function adminLink(parentId: string, studentId: string): R {
+  const p = getUser(parentId);
+  const s = getUser(studentId);
+  if (!p || p.role !== "parent") return { ok: false, error: "Orang tua tidak ditemukan." };
+  if (!s || s.role !== "student" || !s.level) return { ok: false, error: "Siswa tidak ditemukan." };
+  const kids = kidsOf(p);
+  if (kids.includes(s.id)) return { ok: false, error: "Anak ini sudah terhubung." };
+  if (kids.length >= 6) return { ok: false, error: "Satu akun maksimal 6 anak." };
+  p.childIds = [...kids, s.id];
+  save();
+  return { ok: true };
+}
+export function adminUnlink(parentId: string, studentId: string): R {
+  const p = getUser(parentId);
+  if (!p || p.role !== "parent") return { ok: false, error: "Orang tua tidak ditemukan." };
+  return unlinkChild(p, studentId) ? { ok: true } : { ok: false, error: "Anak ini tidak terhubung." };
+}
+
+/** Mengosongkan progres, hasil, karya, nilai, dan rapor seorang siswa. */
+export function adminResetProgress(id: string): R {
+  const db = load();
+  const u = getUser(id);
+  if (!u || u.role !== "student") return { ok: false, error: "Siswa tidak ditemukan." };
+  db.progress = db.progress.filter((p) => p.userId !== u.id);
+  db.works = db.works.filter((w) => w.userId !== u.id);
+  db.reports = (db.reports ?? []).filter((r) => r.studentId !== u.id);
+  delete u.grades;
+  save();
+  return { ok: true };
+}
+export function adminNewCode(id: string): R<{ code: string }> {
+  const u = getUser(id);
+  if (!u || u.role !== "student") return { ok: false, error: "Siswa tidak ditemukan." };
+  u.parentCode = newCode();
+  save();
+  return { ok: true, code: u.parentCode };
+}
+
+/** Cadangan seluruh data tanpa kata sandi dan PIN. */
+export function exportData() {
+  const db = load();
+  return {
+    app: "RakitWeb",
+    exportedAt: nowIso(),
+    users: db.users.map(({ secret: _secret, ...rest }) => rest),
+    progress: db.progress,
+    works: db.works,
+    reports: db.reports ?? [],
+    logs: db.logs ?? [],
+  };
+}
+
+/** Mengembalikan semua data ke data contoh awal. Log lama dibuang. */
+export function resetAllData() {
+  const db = seed();
+  g.__rw_db = db;
+  g.__rw_mig = MIGRATION;
+  migrate(db);
+  tries.__rw_tries?.clear();
+  regTries.__rw_reg = undefined;
+  save();
 }

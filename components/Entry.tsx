@@ -88,7 +88,7 @@ export function Entry({ initialMode }: { initialMode: Mode }) {
             {mode === "home" ? (
               <>
                 <h2 className="text-xl">Masuk</h2>
-                <p className="mt-1 text-sm text-tinta-2">Gunakan akun siswa, orang tua, atau guru. Atau coba mode demo.</p>
+                <p className="mt-1 text-sm text-tinta-2">Gunakan akun siswa, orang tua, guru, atau admin. Atau coba mode demo.</p>
                 <form
                   className="mt-5 flex flex-col gap-3"
                   onSubmit={(e) => {
@@ -117,6 +117,9 @@ export function Entry({ initialMode }: { initialMode: Mode }) {
                   </button>
                   <button type="button" className="tombol-2 !justify-between !border-tinta/20 !bg-white !text-tinta" onClick={() => setMode("guru")}>
                     <span className="flex items-center gap-2.5"><Ikon name="kelas" className="text-kobalt" />Coba sebagai guru</span><span aria-hidden="true" className="text-tinta-2">→</span>
+                  </button>
+                  <button type="button" className="tombol-2 !justify-between !border-tinta/20 !bg-white !text-tinta" disabled={busy} onClick={() => go({ action: "demo-admin" })}>
+                    <span className="flex items-center gap-2.5"><Ikon name="kunci" className="text-kobalt" />Coba sebagai admin super</span><span aria-hidden="true" className="text-tinta-2">→</span>
                   </button>
                 </div>
               </>

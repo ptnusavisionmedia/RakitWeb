@@ -11,9 +11,10 @@ const TTL = 60 * 60 * 24 * 14;
 
 const sign = (payload: string) => crypto.createHmac("sha256", SECRET).update(payload).digest("base64url");
 
-export async function startSession(userId: string) {
+/** adminId diisi saat admin masuk sebagai pengguna lain, agar bisa kembali ke akun admin. */
+export async function startSession(userId: string, adminId?: string) {
   const exp = Math.floor(Date.now() / 1000) + TTL;
-  const payload = Buffer.from(JSON.stringify({ uid: userId, exp })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify(adminId ? { uid: userId, exp, adm: adminId } : { uid: userId, exp })).toString("base64url");
   (await cookies()).set(COOKIE, `${payload}.${sign(payload)}`, {
     httpOnly: true,
     sameSite: "lax",
@@ -27,6 +28,15 @@ export async function endSession() {
 }
 
 export async function currentUser(): Promise<User | null> {
+  return (await readSession())?.user ?? null;
+}
+
+/** Admin yang sedang melihat sebagai pengguna lain. Kosong bila sesi biasa. */
+export async function impersonator(): Promise<User | null> {
+  return (await readSession())?.admin ?? null;
+}
+
+async function readSession(): Promise<{ user: User; admin: User | null } | null> {
   const raw = (await cookies()).get(COOKIE)?.value;
   if (!raw) return null;
   const [payload, sig] = raw.split(".");
@@ -36,9 +46,12 @@ export async function currentUser(): Promise<User | null> {
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
   try {
-    const { uid, exp } = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    const { uid, exp, adm } = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (typeof uid !== "string" || typeof exp !== "number" || exp < Date.now() / 1000) return null;
-    return getUser(uid) ?? null;
+    const user = getUser(uid);
+    if (!user) return null;
+    const a = typeof adm === "string" ? getUser(adm) : undefined;
+    return { user, admin: a && a.role === "admin" ? a : null };
   } catch {
     return null;
   }
@@ -55,7 +68,13 @@ export async function requireStudent(): Promise<Student> {
 export async function requireTeacher(): Promise<User> {
   const u = await currentUser();
   if (!u) redirect("/");
-  if (u.role !== "teacher") redirect(homeFor(u));
+  if (u.role !== "teacher" && u.role !== "admin") redirect(homeFor(u));
+  return u;
+}
+export async function requireAdmin(): Promise<User> {
+  const u = await currentUser();
+  if (!u) redirect("/");
+  if (u.role !== "admin") redirect(homeFor(u));
   return u;
 }
 

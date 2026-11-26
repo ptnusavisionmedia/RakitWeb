@@ -206,3 +206,31 @@ export function TeacherNav({ nickname, level }: { nickname: string; level?: numb
     />
   );
 }
+
+export function AdminNav({ nickname, demo }: { nickname: string; demo?: boolean }) {
+  const logout = useLogout();
+  return (
+    <Bar
+      brandHref="/admin"
+      items={[
+        { href: "/admin", label: "Dasbor", match: "/admin", exact: true, icon: "kelas" },
+        { href: "/admin/pengguna", label: "Pengguna", match: "/admin/pengguna", icon: "avatar" },
+        { href: "/admin/kelas", label: "Kelas", match: "/admin/kelas", icon: "belajar" },
+        { href: "/guru/nilai", label: "Nilai", match: "/guru/nilai", icon: "proyek" },
+        { href: "/admin/sistem", label: "Sistem", match: "/admin/sistem", icon: "profil" },
+      ]}
+      right={
+        <>
+          <span className="flex min-w-0 items-center gap-2.5">
+            <Pic file="avatar" size={38} className="rounded-full" />
+            <span className="hidden min-w-0 leading-tight sm:block md:hidden xl:block">
+              <span className="block max-w-[9rem] truncate font-judul text-[.95rem] font-bold text-tinta lg:max-w-[12rem]">{nickname}</span>
+              <span className="block text-[13px] text-tinta-2">{demo ? "Admin super (demo)" : "Admin super"}</span>
+            </span>
+          </span>
+          <LogoutButton onClick={logout} />
+        </>
+      }
+    />
+  );
+}

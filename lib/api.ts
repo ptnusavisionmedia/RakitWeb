@@ -23,7 +23,11 @@ export async function studentOrNull(): Promise<Student | null> {
 }
 export async function teacherOrNull(): Promise<User | null> {
   const u = await currentUser();
-  return u && u.role === "teacher" ? u : null;
+  return u && (u.role === "teacher" || u.role === "admin") ? u : null;
+}
+export async function adminOrNull(): Promise<User | null> {
+  const u = await currentUser();
+  return u && u.role === "admin" ? u : null;
 }
 export async function parentOrNull(): Promise<User | null> {
   const u = await currentUser();

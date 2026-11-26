@@ -1,4 +1,4 @@
-import { addParentNote, canTeach, createStudent, getUser, getWorkById, gradeComponent, gradeLesson, makeReport, moveStudent, reportsForClass, reviewWork, sendReport } from "@/lib/db";
+import { addLog, addParentNote, canTeach, createStudent, getUser, getWorkById, gradeComponent, gradeLesson, makeReport, moveStudent, reportsForClass, reviewWork, sendReport } from "@/lib/db";
 import { isLevel } from "@/lib/curriculum/types";
 import { fail, json, readJson, teacherOrNull } from "@/lib/api";
 
@@ -50,6 +50,7 @@ export async function POST(req: Request) {
     }
     case "send-report": {
       const r = sendReport(t, String(b.studentId ?? ""));
+      if (r.ok) addLog(t, "Kirim rapor", getUser(String(b.studentId))?.nickname ?? "");
       return r.ok ? json({ ok: true }) : fail(r.error ?? "Gagal.");
     }
     case "class-reports": {
@@ -57,6 +58,7 @@ export async function POST(req: Request) {
       if (!isLevel(level)) return fail("Kelas tidak valid.");
       const mode = b.mode === "send" ? "send" : "make";
       const res = reportsForClass(t, level, mode);
+      if (mode === "send" && res.ok.length) addLog(t, "Kirim rapor kelas", `Kelas ${level}: ${res.ok.join(", ")}`);
       return json({ ok: true, done: res.ok, skipped: res.skipped });
     }
     default:

@@ -5,6 +5,8 @@ export const STATUS_LABEL: Record<string, string> = {
   published: "Tampil di galeri kelas",
 };
 
+export const ROLE_LABEL: Record<string, string> = { student: "Siswa", teacher: "Guru", parent: "Orang tua", admin: "Admin" };
+
 export function ago(iso?: string): string {
   if (!iso) return "belum pernah";
   const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
